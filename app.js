@@ -2194,7 +2194,7 @@ class SynapseApp {
       // ★ エイムアシストで吸着されたターゲットを最優先で接続
       targetId = this.aimSnappedPort.nodeId;
       toPort = this.aimSnappedPort.port;
-    } else {
+    } else if (e && e.target) {
       const handleEl = e.target.closest(".connector-handle");
       const targetEl = e.target.closest(".mind-node");
       if (targetEl) {
@@ -2931,11 +2931,42 @@ ${sourceContent}
   loadProject(projectId) {
     const list = this.getProjectsList();
     const proj = list.find(p => p.id === projectId);
-    if (!proj) return;
+    const projName = proj ? proj.name : "プロジェクト";
 
-    const raw = localStorage.getItem(`synapse_proj_data_${projectId}`);
+    let raw = localStorage.getItem(`synapse_proj_data_${projectId}`);
+
+    // ★ 自動救済フォールバック:
+    // 個別プロジェクトキーが端末内に欠落していても、メイン保管庫から自動救済・復元する
     if (!raw) {
-      alert("プロジェクトデータが見つかりませんでした。");
+      const mainSaved = localStorage.getItem("synapse_notebook_data_v2") || localStorage.getItem("synapse_notebook_data");
+      if (mainSaved) {
+        try {
+          const parsedMain = JSON.parse(mainSaved);
+          if (Array.isArray(parsedMain.nodes) && parsedMain.nodes.length > 0) {
+            raw = mainSaved;
+            // 欠損していたプロジェクトキーを自動再生成して安全に保存
+            const recoveredData = {
+              id: projectId,
+              name: projName,
+              nodes: parsedMain.nodes,
+              connections: parsedMain.connections || [],
+              groups: parsedMain.groups || [],
+              pan: parsedMain.pan || { x: 70, y: 30 },
+              zoom: parsedMain.zoom || 1.0,
+              updatedAt: parsedMain.updatedAt || new Date().toISOString()
+            };
+            localStorage.setItem(`synapse_proj_data_${projectId}`, JSON.stringify(recoveredData));
+            console.log(`プロジェクト「${projName}」のデータをメイン保管庫から自動救済しました。`);
+          }
+        } catch (e) {}
+      }
+    }
+
+    if (!raw) {
+      alert(`プロジェクト「${projName}」のデータがこの端末で見つかりませんでした。
+
+【解決方法】
+PCで「書き出し」したファイルをスマホの「読み込み」で開くか、クラウド同期をお試しください。`);
       return;
     }
 
@@ -2945,32 +2976,35 @@ ${sourceContent}
 
       this.nodes = Array.isArray(data.nodes) ? data.nodes : [];
       this.connections = Array.isArray(data.connections) ? data.connections : [];
+      this.groups = Array.isArray(data.groups) ? data.groups : [];
       if (data.pan) this.pan = data.pan;
       if (data.zoom) this.zoom = data.zoom;
 
       this.currentProjectId = projectId;
-      this.currentProjectName = proj.name;
+      this.currentProjectName = projName;
       localStorage.setItem("synapse_active_project_id", projectId);
-      localStorage.setItem("synapse_active_project_name", proj.name);
+      localStorage.setItem("synapse_active_project_name", projName);
 
       this.deselectAll();
       this.render();
       this.updateCanvasTransform();
       this.saveState();
       this.closeProjectsModal();
-      alert(`📂 プロジェクト「${proj.name}」を読み込みました！`);
+      alert(`📂 プロジェクト「${projName}」を読み込みました！`);
     } catch (e) {
       alert("読み込みエラー: " + e.message);
     }
   }
 
-  deleteProject(projectId) {
+  deleteProject(projectId, skipConfirm = false) {
     const list = this.getProjectsList();
     const proj = list.find(p => p.id === projectId);
-    if (!proj) return;
+    const projName = proj ? proj.name : "プロジェクト";
 
-    if (!confirm(`プロジェクト「${proj.name}」を削除してもよろしいですか？\n※現在のキャンバスの内容はそのまま残ります。`)) {
-      return;
+    if (!skipConfirm) {
+      if (!confirm(`プロジェクト「${projName}」を完全に削除してもよろしいですか？\n※現在のキャンバスの内容はそのまま残ります。`)) {
+        return;
+      }
     }
 
     try {
@@ -2985,7 +3019,13 @@ ${sourceContent}
         localStorage.removeItem("synapse_active_project_name");
       }
 
+      // ★ クラウド（Firebase）にも削除を即時同期して復活を完全防止！
+      if (this.currentUser && this.firestore) {
+        this.syncToCloud(true);
+      }
+
       this.renderProjectsList();
+      alert(`🗑️ プロジェクト「${projName}」を完全に削除しました。`);
     } catch (e) {
       alert("削除エラー: " + e.message);
     }
@@ -3042,21 +3082,65 @@ ${sourceContent}
           </div>
         </div>
         <div class="project-item-actions">
-          <button class="btn btn-secondary btn-xs btn-load-proj" title="このプロジェクトを開く">
+          <button type="button" class="btn btn-secondary btn-xs btn-load-proj" title="このプロジェクトを開く">
             開く
           </button>
-          <button class="btn btn-secondary btn-xs btn-overwrite-proj" title="現在のキャンバスで上書き">
+          <button type="button" class="btn btn-secondary btn-xs btn-overwrite-proj" title="現在のキャンバスで上書き">
             上書き
           </button>
-          <button class="btn btn-subtle-danger btn-xs btn-delete-proj" title="プロジェクトを削除">
+          <button type="button" class="btn btn-subtle-danger btn-xs btn-delete-proj" title="プロジェクトを削除">
             削除
           </button>
         </div>
       `;
 
-      card.querySelector(".btn-load-proj").addEventListener("click", () => this.loadProject(p.id));
-      card.querySelector(".btn-overwrite-proj").addEventListener("click", () => this.overwriteProject(p.id));
-      card.querySelector(".btn-delete-proj").addEventListener("click", () => this.deleteProject(p.id));
+      const loadBtn = card.querySelector(".btn-load-proj");
+      const overwriteBtn = card.querySelector(".btn-overwrite-proj");
+      const deleteBtn = card.querySelector(".btn-delete-proj");
+
+      if (loadBtn) {
+        loadBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          this.loadProject(p.id);
+        });
+      }
+      if (overwriteBtn) {
+        overwriteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          this.overwriteProject(p.id);
+        });
+      }
+      if (deleteBtn) {
+        let confirmArmed = false;
+        let timer = null;
+
+        deleteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+
+          if (!confirmArmed) {
+            confirmArmed = true;
+            deleteBtn.textContent = "本当に削除？";
+            deleteBtn.style.backgroundColor = "#ef4444";
+            deleteBtn.style.color = "#ffffff";
+            deleteBtn.style.borderColor = "#dc2626";
+
+            timer = setTimeout(() => {
+              confirmArmed = false;
+              deleteBtn.textContent = "削除";
+              deleteBtn.style.backgroundColor = "";
+              deleteBtn.style.color = "";
+              deleteBtn.style.borderColor = "";
+            }, 4000);
+          } else {
+            clearTimeout(timer);
+            confirmArmed = false;
+            this.deleteProject(p.id, true);
+          }
+        });
+      }
 
       this.projectsListContainer.appendChild(card);
     });
@@ -3330,6 +3414,7 @@ ${sourceContent}
         const payload = {
           nodes: this.nodes,
           connections: this.connections,
+          groups: this.groups,
           pan: this.pan,
           zoom: this.zoom,
           projects: this.getProjectsList(),
@@ -3368,9 +3453,23 @@ ${sourceContent}
           if (data.pan) this.pan = data.pan;
           if (data.zoom) this.zoom = data.zoom;
           if (Array.isArray(data.projects)) this.saveProjectsList(data.projects);
+          if (Array.isArray(data.groups)) this.groups = data.groups;
           if (data.activeProjectId) {
             this.currentProjectId = data.activeProjectId;
             this.currentProjectName = data.activeProjectName || "プロジェクト";
+            localStorage.setItem("synapse_active_project_id", this.currentProjectId);
+            localStorage.setItem("synapse_active_project_name", this.currentProjectName);
+            // 個別プロジェクトキーも自動生成
+            localStorage.setItem(`synapse_proj_data_${this.currentProjectId}`, JSON.stringify({
+              id: this.currentProjectId,
+              name: this.currentProjectName,
+              nodes: this.nodes,
+              connections: this.connections,
+              groups: this.groups,
+              pan: this.pan,
+              zoom: this.zoom,
+              updatedAt: data.updatedAt || new Date().toISOString()
+            }));
           }
 
           this.deselectAll();
