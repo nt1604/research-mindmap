@@ -41,6 +41,15 @@ class SynapseApp {
 
     // 接続線ドラッグ状態
     this.connectingSourceId = null;
+    this.connectingSourcePort = null;
+
+    // Firebase クラウド同期状態
+    this.firebaseApp = null;
+    this.firebaseAuth = null;
+    this.firestore = null;
+    this.currentUser = null;
+    this.syncDebounceTimer = null;
+    this.authMode = "login";
 
     // DOM要素の取得
     this.cacheDom();
@@ -54,6 +63,9 @@ class SynapseApp {
     // 初期描画
     this.render();
     this.updateCanvasTransform();
+
+    // Firebaseの初期化
+    this.initFirebase();
   }
 
   cacheDom() {
@@ -75,6 +87,9 @@ class SynapseApp {
     this.addTopdownBtn = document.getElementById("add-topdown-btn");
     this.addBottomupBtn = document.getElementById("add-bottomup-btn");
     this.addSynthesisBtn = document.getElementById("add-synthesis-btn");
+    this.addCustomBtn = document.getElementById("add-custom-btn");
+    this.hamburgerMenuBtn = document.getElementById("hamburger-menu-btn");
+    this.hamburgerDropdown = document.getElementById("hamburger-dropdown");
     this.undoBtn = document.getElementById("undo-btn");
     this.exportJsonBtn = document.getElementById("export-json-btn");
     this.importJsonInput = document.getElementById("import-json-input");
@@ -88,6 +103,9 @@ class SynapseApp {
     this.noteTypeBadge = document.getElementById("note-type-badge");
     this.nodeTitleInput = document.getElementById("node-title-input");
     this.nodeTypeSelect = document.getElementById("node-type-select");
+    this.genreChips = document.querySelectorAll("#genre-selector-chips .genre-chip");
+    this.nodeCustomNameGroup = document.getElementById("node-custom-name-group");
+    this.nodeCustomNameInput = document.getElementById("node-custom-name-input");
     this.nodeStatusSelect = document.getElementById("node-status-select");
     this.nodeBodyInput = document.getElementById("node-body-input");
     this.nodeTagsInput = document.getElementById("node-tags-input");
@@ -109,11 +127,13 @@ class SynapseApp {
     this.attachedCount = document.getElementById("attached-count");
     this.clearFilesBtn = document.getElementById("clear-files-btn");
     this.aiTextInput = document.getElementById("ai-text-input");
+    this.aiInstructionInput = document.getElementById("ai-instruction-input");
     this.runAiBtn = document.getElementById("run-ai-generate-btn");
     this.aiStatus = document.getElementById("ai-status");
 
     // 手動コピペ
     this.manualSourceText = document.getElementById("manual-source-text");
+    this.manualInstructionInput = document.getElementById("manual-instruction-input");
     this.copyPromptBtn = document.getElementById("copy-prompt-btn");
     this.manualResultJson = document.getElementById("manual-result-json");
     this.applyManualResultBtn = document.getElementById("apply-manual-result-btn");
@@ -141,6 +161,44 @@ class SynapseApp {
     this.currentProjectStatus = document.getElementById("current-project-status");
     this.savedProjectCount = document.getElementById("saved-project-count");
     this.projectsListContainer = document.getElementById("projects-list-container");
+
+    // アカウント認証・クラウド同期
+    this.authBtn = document.getElementById("auth-btn");
+    this.authBtnLabel = document.getElementById("auth-btn-label");
+    this.syncStatusIndicator = document.getElementById("sync-status-indicator");
+    this.authModal = document.getElementById("auth-modal");
+    this.closeAuthModalBtn = document.getElementById("close-auth-modal-btn");
+    this.closeAuthBottomBtn = document.getElementById("close-auth-bottom-btn");
+    this.authLoggedInView = document.getElementById("auth-logged-in-view");
+    this.authFormsView = document.getElementById("auth-forms-view");
+    this.authUserEmail = document.getElementById("auth-user-email");
+    this.doLogoutBtn = document.getElementById("do-logout-btn");
+    this.manualCloudPullBtn = document.getElementById("manual-cloud-pull-btn");
+    this.authTabLogin = document.getElementById("auth-tab-login");
+    this.authTabRegister = document.getElementById("auth-tab-register");
+    this.authEmailInput = document.getElementById("auth-email-input");
+    this.authPasswordInput = document.getElementById("auth-password-input");
+    this.authSubmitBtn = document.getElementById("auth-submit-btn");
+    this.authErrorMsg = document.getElementById("auth-error-msg");
+    this.authEmailVerifiedBadge = document.getElementById("auth-email-verified-badge");
+    this.authVerifyWarning = document.getElementById("auth-verify-warning");
+    this.resendVerifyEmailBtn = document.getElementById("resend-verify-email-btn");
+    this.doDeleteAccountBtn = document.getElementById("do-delete-account-btn");
+    this.authTosContainer = document.getElementById("auth-tos-container");
+    this.authTosCheckbox = document.getElementById("auth-tos-checkbox");
+    this.openTosBtn = document.getElementById("open-tos-btn");
+    this.tosModal = document.getElementById("tos-modal");
+    this.closeTosModalBtn = document.getElementById("close-tos-modal-btn");
+    this.closeTosBottomBtn = document.getElementById("close-tos-bottom-btn");
+  }
+
+  // キャンバス上の座標をマウス位置から100%正確に取得（ヘッダー余白・ズーム・パン完全補正）
+  getCanvasCoords(e) {
+    const rect = this.container.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left - this.pan.x) / this.zoom,
+      y: (e.clientY - rect.top - this.pan.y) / this.zoom
+    };
   }
 
   // ==========================================
@@ -171,8 +229,12 @@ class SynapseApp {
       }
     }
 
-    // ★ 現在のデータが空の場合、過去のすべてのキーから救出可能なデータを探す！
-    this.checkForRecoverableData(!loaded);
+    // 既存の黄色い救出バナーがあれば消去
+    const existingBanner = document.getElementById("rescue-banner");
+    if (existingBanner) existingBanner.remove();
+
+    // ★ 黄色い救出バナーの自動ポップアップは暫定的に停止（必要時のみ内部保持）
+    // this.checkForRecoverableData(!loaded);
   }
 
   // 過去のすべての保存データをくまなく探索して救出する
@@ -292,6 +354,9 @@ class SynapseApp {
         localStorage.setItem(`synapse_auto_backup_${backupIdx}`, JSON.stringify(data));
       } catch (e) {}
     }
+
+    // クラウド自動同期（ログイン中の場合）
+    this.syncToCloud();
   }
 
   // ==========================================
@@ -330,7 +395,30 @@ class SynapseApp {
     this.addTopdownBtn.addEventListener("click", () => this.addNewNode("topdown"));
     this.addBottomupBtn.addEventListener("click", () => this.addNewNode("bottomup"));
     this.addSynthesisBtn.addEventListener("click", () => this.addNewNode("synthesis"));
-    this.undoBtn.addEventListener("click", () => this.undo());
+    if (this.addCustomBtn) {
+      this.addCustomBtn.addEventListener("click", () => this.addNewNode("custom"));
+    }
+    if (this.undoBtn) {
+      this.undoBtn.addEventListener("click", () => this.undo());
+    }
+
+    // ハンバーガーメニュー開閉
+    if (this.hamburgerMenuBtn && this.hamburgerDropdown) {
+      this.hamburgerMenuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.hamburgerDropdown.classList.toggle("open");
+      });
+      this.hamburgerDropdown.addEventListener("click", (e) => {
+        if (e.target.closest(".dropdown-item")) {
+          this.hamburgerDropdown.classList.remove("open");
+        }
+      });
+      document.addEventListener("click", (e) => {
+        if (!this.hamburgerDropdown.contains(e.target) && !this.hamburgerMenuBtn.contains(e.target)) {
+          this.hamburgerDropdown.classList.remove("open");
+        }
+      });
+    }
 
     // ショートカットキー (Ctrl+Z / Cmd+Z)
     window.addEventListener("keydown", (e) => {
@@ -375,13 +463,18 @@ class SynapseApp {
         const deltaX = (e.clientX - this.startResize.clientX) / this.zoom;
         const deltaY = (e.clientY - this.startResize.clientY) / this.zoom;
         const newWidth = Math.max(160, Math.round(this.startResize.startWidth + deltaX));
-        const newHeight = Math.max(70, Math.round(this.startResize.startHeight + deltaY));
         this.resizingNode.width = newWidth;
-        this.resizingNode.height = newHeight;
         const el = document.getElementById(`dom-${this.resizingNode.id}`);
         if (el) {
           el.style.width = `${newWidth}px`;
-          el.style.height = `${newHeight}px`;
+        }
+        if (!this.resizingNode.collapsed) {
+          const newHeight = Math.max(70, Math.round(this.startResize.startHeight + deltaY));
+          this.resizingNode.height = newHeight;
+          if (el) {
+            el.style.height = `${newHeight}px`;
+            el.classList.add("has-custom-height");
+          }
         }
         this.renderConnections();
       } else if (this.isPanning) {
@@ -390,10 +483,9 @@ class SynapseApp {
         this.updateCanvasTransform();
       } else if (this.draggingNode) {
         this.hasDragged = true;
-        const x = (e.clientX - this.dragOffset.x - this.pan.x) / this.zoom;
-        const y = (e.clientY - this.dragOffset.y - this.pan.y) / this.zoom;
-        this.draggingNode.x = Math.max(20, Math.round(x));
-        this.draggingNode.y = Math.max(20, Math.round(y));
+        const mouse = this.getCanvasCoords(e);
+        this.draggingNode.x = Math.max(20, Math.round(mouse.x - this.dragOffset.x));
+        this.draggingNode.y = Math.max(20, Math.round(mouse.y - this.dragOffset.y));
         this.updateNodePosition(this.draggingNode);
         this.renderConnections();
       } else if (this.connectingSourceId) {
@@ -433,6 +525,17 @@ class SynapseApp {
     // ノート更新
     this.nodeTitleInput.addEventListener("input", () => this.updateSelectedNode("title", this.nodeTitleInput.value));
     this.nodeTypeSelect.addEventListener("change", () => this.updateSelectedNode("type", this.nodeTypeSelect.value));
+    if (this.genreChips) {
+      this.genreChips.forEach(chip => {
+        chip.addEventListener("click", () => {
+          const type = chip.dataset.type;
+          this.updateSelectedNode("type", type);
+        });
+      });
+    }
+    if (this.nodeCustomNameInput) {
+      this.nodeCustomNameInput.addEventListener("input", () => this.updateSelectedNode("customLabel", this.nodeCustomNameInput.value));
+    }
     this.nodeStatusSelect.addEventListener("change", () => this.updateSelectedNode("status", this.nodeStatusSelect.value));
     this.nodeBodyInput.addEventListener("input", () => this.updateSelectedNode("body", this.nodeBodyInput.value));
     this.nodeTagsInput.addEventListener("input", () => this.updateSelectedNode("tags", this.nodeTagsInput.value));
@@ -539,6 +642,60 @@ class SynapseApp {
         if (e.key === "Enter") this.handleSaveNewProject();
       });
     }
+
+    // アカウント認証・クラウド同期のイベント
+    if (this.authBtn) {
+      this.authBtn.addEventListener("click", () => this.openAuthModal());
+    }
+    if (this.closeAuthModalBtn) {
+      this.closeAuthModalBtn.addEventListener("click", () => this.closeAuthModal());
+    }
+    if (this.closeAuthBottomBtn) {
+      this.closeAuthBottomBtn.addEventListener("click", () => this.closeAuthModal());
+    }
+    if (this.authTabLogin) {
+      this.authTabLogin.addEventListener("click", () => this.switchAuthTab("login"));
+    }
+    if (this.authTabRegister) {
+      this.authTabRegister.addEventListener("click", () => this.switchAuthTab("register"));
+    }
+    if (this.authSubmitBtn) {
+      this.authSubmitBtn.addEventListener("click", () => this.handleAuthSubmit());
+    }
+    if (this.doLogoutBtn) {
+      this.doLogoutBtn.addEventListener("click", () => this.handleLogout());
+    }
+    if (this.manualCloudPullBtn) {
+      this.manualCloudPullBtn.addEventListener("click", () => this.pullFromCloud(true));
+    }
+    if (this.authPasswordInput) {
+      this.authPasswordInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.handleAuthSubmit();
+      });
+    }
+    if (this.resendVerifyEmailBtn) {
+      this.resendVerifyEmailBtn.addEventListener("click", () => this.handleResendVerificationEmail());
+    }
+    if (this.doDeleteAccountBtn) {
+      this.doDeleteAccountBtn.addEventListener("click", () => this.handleDeleteAccount());
+    }
+
+    // 利用規約・免責事項モーダル
+    if (this.openTosBtn && this.tosModal) {
+      this.openTosBtn.addEventListener("click", () => {
+        this.tosModal.style.display = "flex";
+      });
+    }
+    if (this.closeTosModalBtn && this.tosModal) {
+      this.closeTosModalBtn.addEventListener("click", () => {
+        this.tosModal.style.display = "none";
+      });
+    }
+    if (this.closeTosBottomBtn && this.tosModal) {
+      this.closeTosBottomBtn.addEventListener("click", () => {
+        this.tosModal.style.display = "none";
+      });
+    }
   }
 
   // ==========================================
@@ -583,12 +740,15 @@ class SynapseApp {
     this.nodesContainer.innerHTML = "";
     this.nodes.forEach(node => {
       const el = document.createElement("div");
-      el.className = `mind-node node-${node.type} ${this.selectedNodeId === node.id ? "selected" : ""}`;
+      el.className = `mind-node node-${node.type} ${this.selectedNodeId === node.id ? "selected" : ""} ${node.collapsed ? "is-collapsed" : ""}`;
       el.id = `dom-${node.id}`;
       el.style.left = `${node.x}px`;
       el.style.top = `${node.y}px`;
       if (node.width) el.style.width = `${node.width}px`;
-      if (node.height) el.style.height = `${node.height}px`;
+      if (node.height) {
+        el.style.height = `${node.height}px`;
+        el.classList.add("has-custom-height");
+      }
 
       // クイック削除ボタン「✕」
       const quickDel = document.createElement("button");
@@ -619,6 +779,7 @@ class SynapseApp {
       // 上部コネクタ
       const topHandle = document.createElement("div");
       topHandle.className = "connector-handle connector-top";
+      topHandle.dataset.port = "top";
       topHandle.title = "ドラッグして他のカードと線をつなぐ";
       topHandle.addEventListener("mousedown", (e) => {
         e.stopPropagation();
@@ -628,18 +789,45 @@ class SynapseApp {
       // 下部コネクタ
       const bottomHandle = document.createElement("div");
       bottomHandle.className = "connector-handle connector-bottom";
+      bottomHandle.dataset.port = "bottom";
       bottomHandle.title = "ドラッグして他のカードと線をつなぐ";
       bottomHandle.addEventListener("mousedown", (e) => {
         e.stopPropagation();
         this.startConnectionDrag(node.id, e);
       });
 
-      const typeLabel = node.type === "topdown" ? "Top-down (問い)" :
-                        node.type === "bottomup" ? "Bottom-up (知見)" : "Synthesis (統合)";
+      // 左部コネクタ
+      const leftHandle = document.createElement("div");
+      leftHandle.className = "connector-handle connector-left";
+      leftHandle.dataset.port = "left";
+      leftHandle.title = "ドラッグして他のカードと線をつなぐ";
+      leftHandle.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        this.startConnectionDrag(node.id, e);
+      });
+
+      // 右部コネクタ
+      const rightHandle = document.createElement("div");
+      rightHandle.className = "connector-handle connector-right";
+      rightHandle.dataset.port = "right";
+      rightHandle.title = "ドラッグして他のカードと線をつなぐ";
+      rightHandle.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        this.startConnectionDrag(node.id, e);
+      });
+
+      let typeLabel = "Top-down (問い・仮説)";
+      if (node.type === "bottomup") {
+        typeLabel = "Bottom-up (知見・メモ)";
+      } else if (node.type === "synthesis") {
+        typeLabel = "Synthesis (検証・合流)";
+      } else if (node.type === "custom") {
+        typeLabel = `Custom (${node.customLabel || "その他"})`;
+      }
 
       el.innerHTML = `
         <div class="node-header">
-          <span class="node-badge">${typeLabel}</span>
+          <span class="node-badge" title="クリックで折りたたみ / 展開">${typeLabel}</span>
           <span class="node-status-dot status-${node.status}"></span>
         </div>
         <div class="node-title">${this.escapeHtml(node.title)}</div>
@@ -650,12 +838,27 @@ class SynapseApp {
       el.appendChild(resizeHandle);
       el.appendChild(topHandle);
       el.appendChild(bottomHandle);
+      el.appendChild(leftHandle);
+      el.appendChild(rightHandle);
+
+      // バッジをクリックした時に折りたたみ・展開をトグル
+      const badgeEl = el.querySelector(".node-badge");
+      if (badgeEl) {
+        badgeEl.addEventListener("mousedown", (e) => {
+          e.stopPropagation();
+        });
+        badgeEl.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.toggleNodeCollapse(node.id);
+        });
+      }
 
       el.addEventListener("mousedown", (e) => {
         if (
           e.target.closest(".connector-handle") ||
           e.target.closest(".node-quick-delete") ||
-          e.target.closest(".node-resize-handle")
+          e.target.closest(".node-resize-handle") ||
+          e.target.closest(".node-badge")
         ) return;
         e.stopPropagation();
         this.selectNode(node.id);
@@ -663,10 +866,10 @@ class SynapseApp {
         this.pushHistory(); // 移動前のスナップショット
         this.draggingNode = node;
         this.hasDragged = false;
-        const rect = el.getBoundingClientRect();
+        const mouse = this.getCanvasCoords(e);
         this.dragOffset = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top
+          x: mouse.x - node.x,
+          y: mouse.y - node.y
         };
       });
 
@@ -682,6 +885,26 @@ class SynapseApp {
     }
   }
 
+  toggleNodeCollapse(nodeId) {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    this.pushHistory();
+    node.collapsed = !node.collapsed;
+
+    const el = document.getElementById(`dom-${node.id}`);
+    if (el) {
+      if (node.collapsed) {
+        el.classList.add("is-collapsed");
+      } else {
+        el.classList.remove("is-collapsed");
+      }
+    }
+
+    this.renderConnections();
+    this.saveState();
+  }
+
   addNewNode(type) {
     this.pushHistory();
 
@@ -690,17 +913,20 @@ class SynapseApp {
 
     if (type === "topdown") targetY = Math.max(60, targetY - 140);
     if (type === "bottomup") targetY = targetY + 140;
+    if (type === "custom") targetY = targetY + 180;
 
     const id = `node-${Date.now()}`;
     const defaultTitles = {
       topdown: "新規の問い・仮説",
       bottomup: "新規の知見・メモ",
-      synthesis: "新規の検証結果"
+      synthesis: "新規の検証結果",
+      custom: "新規メモ・課題"
     };
 
     const newNode = {
       id,
       type,
+      customLabel: type === "custom" ? "その他" : "",
       title: defaultTitles[type] || "新規ノード",
       body: "",
       status: "idea",
@@ -733,16 +959,38 @@ class SynapseApp {
 
     this.nodeTitleInput.value = node.title || "";
     this.nodeTypeSelect.value = node.type;
+    this.updateActiveGenreChip(node.type);
     this.nodeStatusSelect.value = node.status;
     this.nodeBodyInput.value = node.body || "";
     this.nodeTagsInput.value = node.tags || "";
 
     const typeNames = {
       topdown: "問い・仮説 (Top-down)",
-      bottomup: "知見・データ (Bottom-up)",
-      synthesis: "検証・合流 (Synthesis)"
+      bottomup: "知見・メモ (Bottom-up)",
+      synthesis: "検証・合流 (Synthesis)",
+      custom: `その他・自由設定 (${node.customLabel || "その他"})`
     };
     this.noteTypeBadge.textContent = typeNames[node.type] || "詳細ノート";
+
+    if (this.nodeCustomNameGroup && this.nodeCustomNameInput) {
+      if (node.type === "custom") {
+        this.nodeCustomNameGroup.style.display = "block";
+        this.nodeCustomNameInput.value = node.customLabel || "その他";
+      } else {
+        this.nodeCustomNameGroup.style.display = "none";
+      }
+    }
+  }
+
+  updateActiveGenreChip(type) {
+    if (this.genreChips) {
+      this.genreChips.forEach(chip => {
+        chip.classList.toggle("active", chip.dataset.type === type);
+      });
+    }
+    if (this.nodeTypeSelect) {
+      this.nodeTypeSelect.value = type;
+    }
   }
 
   deselectAll() {
@@ -754,6 +1002,9 @@ class SynapseApp {
     this.noteEmptyState.style.display = "flex";
     this.noteActiveContent.style.display = "none";
     this.noteTypeBadge.textContent = "未選択";
+    if (this.nodeCustomNameGroup) {
+      this.nodeCustomNameGroup.style.display = "none";
+    }
   }
 
   updateSelectedNode(field, value) {
@@ -776,13 +1027,36 @@ class SynapseApp {
         const dot = el.querySelector(".node-status-dot");
         if (dot) dot.className = `node-status-dot status-${value}`;
       } else if (field === "type") {
-        el.className = `mind-node node-${value} selected`;
+        this.updateActiveGenreChip(value);
+        el.className = `mind-node node-${value} selected ${node.height ? "has-custom-height" : ""}`;
         const badge = el.querySelector(".node-badge");
         if (badge) {
-          badge.textContent = value === "topdown" ? "Top-down (問い)" :
-                              value === "bottomup" ? "Bottom-up (知見)" : "Synthesis (統合)";
+          badge.textContent = value === "topdown" ? "Top-down (問い・仮説)" :
+                              value === "bottomup" ? "Bottom-up (知見・メモ)" :
+                              value === "synthesis" ? "Synthesis (検証・合流)" :
+                              `Custom (${node.customLabel || "その他"})`;
         }
+        if (this.nodeCustomNameGroup && this.nodeCustomNameInput) {
+          this.nodeCustomNameGroup.style.display = value === "custom" ? "block" : "none";
+          if (value === "custom" && !node.customLabel) {
+            node.customLabel = "その他";
+            this.nodeCustomNameInput.value = "その他";
+          }
+        }
+        const typeNames = {
+          topdown: "問い・仮説 (Top-down)",
+          bottomup: "知見・メモ (Bottom-up)",
+          synthesis: "検証・合流 (Synthesis)",
+          custom: `その他・自由設定 (${node.customLabel || "その他"})`
+        };
+        this.noteTypeBadge.textContent = typeNames[value] || "詳細ノート";
         this.renderConnections();
+      } else if (field === "customLabel") {
+        const badge = el.querySelector(".node-badge");
+        if (badge && node.type === "custom") {
+          badge.textContent = `Custom (${value || "その他"})`;
+        }
+        this.noteTypeBadge.textContent = `その他・自由設定 (${value || "その他"})`;
       }
     }
   }
@@ -815,6 +1089,28 @@ class SynapseApp {
   // ==========================================
   // 7. 接続線描画 ＆ 右クリック解除・スタイル変更
   // ==========================================
+  // 各ノードの指定ポートの座標と外向き法線ベクトルを取得
+  getNodePortCoord(node, port = "bottom", clearance = 7) {
+    const el = document.getElementById(`dom-${node.id}`);
+    const w = el ? el.offsetWidth : (node.width || 250);
+    const h = el ? el.offsetHeight : (node.height || 96);
+    const cx = node.x + w / 2;
+    const cy = node.y + h / 2;
+
+    switch (port) {
+      case "top":
+        return { x: cx, y: node.y - clearance, nx: 0, ny: -1 };
+      case "bottom":
+        return { x: cx, y: node.y + h + clearance, nx: 0, ny: 1 };
+      case "left":
+        return { x: node.x - clearance, y: cy, nx: -1, ny: 0 };
+      case "right":
+        return { x: node.x + w + clearance, y: cy, nx: 1, ny: 0 };
+      default:
+        return { x: cx, y: node.y + h + clearance, nx: 0, ny: 1 };
+    }
+  }
+
   renderConnections() {
     // ★ defs内のマーカー部品を保護し、描画された接続線のみをピンポイントで削除
     const paths = this.connectionsSvg.querySelectorAll(".connection-path, .connection-hit-path");
@@ -825,36 +1121,36 @@ class SynapseApp {
       const toNode = this.nodes.find(n => n.id === conn.to);
       if (!fromNode || !toNode) return;
 
-      // ノードの実際のサイズを取得（テキスト量による高さの変化に対応）
-      const fromEl = document.getElementById(`dom-${fromNode.id}`);
-      const toEl = document.getElementById(`dom-${toNode.id}`);
-      const fromWidth = fromNode.width || (fromEl ? fromEl.offsetWidth : 250);
-      const fromHeight = fromNode.height || (fromEl ? fromEl.offsetHeight : 96);
-      const toWidth = toNode.width || (toEl ? toEl.offsetWidth : 250);
-      const toHeight = toNode.height || (toEl ? toEl.offsetHeight : 96);
+      // ★ 矢印の生える場所（ポート）はカード位置を変えても固定！
+      // 過去データや未設定の場合はデフォルトで bottom -> top
+      const fromPort = conn.fromPort || "bottom";
+      const toPort = conn.toPort || "top";
 
-      let startX = fromNode.x + fromWidth / 2;
-      let endX = toNode.x + toWidth / 2;
-      let startY, endY;
+      const p1 = this.getNodePortCoord(fromNode, fromPort);
+      const p2 = this.getNodePortCoord(toNode, toPort);
 
-      // 丸ポチの外側に矢印の先端がピタッと接する対称クリアランス（7px）
-      const clearance = 7.5;
+      const startX = p1.x;
+      const startY = p1.y;
+      const endX = p2.x;
+      const endY = p2.y;
 
-      if (fromNode.y <= toNode.y) {
-        // 上から下へ接続：始点（上側）も終点（下側）も丸ポチから全く同じ距離で対称に接する
-        startY = fromNode.y + fromHeight + clearance;
-        endY = toNode.y - clearance;
-      } else {
-        // 下から上へ接続
-        startY = fromNode.y - clearance;
-        endY = toNode.y + toHeight + clearance;
-      }
+      // 2点間の距離と相対ベクトル
+      const dx = endX - startX;
+      const dy = endY - startY;
+      const dist = Math.hypot(dx, dy);
 
-      const deltaY = Math.abs(endY - startY) * 0.5;
-      const c1Y = startY < endY ? startY + deltaY : startY - deltaY;
-      const c2Y = startY < endY ? endY - deltaY : endY + deltaY;
+      // ポートの外向き法線方向に沿って曲線が自然に張り出すテンション
+      const tension = Math.min(220, Math.max(40, dist * 0.45));
 
-      const pathData = `M ${startX} ${startY} C ${startX} ${c1Y}, ${endX} ${c2Y}, ${endX} ${endY}`;
+      // 制御点1: 始点ポートの法線ベクトル方向へ伸ばす
+      const c1X = startX + p1.nx * tension;
+      const c1Y = startY + p1.ny * tension;
+
+      // 制御点2: 終点ポートの法線ベクトル方向へ伸ばす
+      const c2X = endX + p2.nx * tension;
+      const c2Y = endY + p2.ny * tension;
+
+      const pathData = `M ${startX} ${startY} C ${c1X} ${c1Y}, ${c2X} ${c2Y}, ${endX} ${endY}`;
 
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", pathData);
@@ -1001,25 +1297,41 @@ class SynapseApp {
     const fromNode = this.nodes.find(n => n.id === nodeId);
     if (!fromNode) return;
 
-    this.dragLine.style.display = "block";
-    const startX = fromNode.x + 125;
-    const startY = fromNode.y + 48;
+    // クリックされたハンドルから生えるポート（top, bottom, left, right）を記録
+    let port = "bottom";
+    if (e && e.target) {
+      if (e.target.dataset.port) {
+        port = e.target.dataset.port;
+      } else if (e.target.classList.contains("connector-top")) {
+        port = "top";
+      } else if (e.target.classList.contains("connector-bottom")) {
+        port = "bottom";
+      } else if (e.target.classList.contains("connector-left")) {
+        port = "left";
+      } else if (e.target.classList.contains("connector-right")) {
+        port = "right";
+      }
+    }
+    this.connectingSourcePort = port;
 
-    this.dragLine.setAttribute("x1", startX);
-    this.dragLine.setAttribute("y1", startY);
-    this.dragLine.setAttribute("x2", startX);
-    this.dragLine.setAttribute("y2", startY);
+    this.dragLine.style.display = "block";
+    const mouse = this.getCanvasCoords(e);
+
+    this.dragLine.setAttribute("x1", mouse.x);
+    this.dragLine.setAttribute("y1", mouse.y);
+    this.dragLine.setAttribute("x2", mouse.x);
+    this.dragLine.setAttribute("y2", mouse.y);
   }
 
   updateDragLine(e) {
-    const mouseX = (e.clientX - this.pan.x) / this.zoom;
-    const mouseY = (e.clientY - this.pan.y) / this.zoom;
-    this.dragLine.setAttribute("x2", mouseX);
-    this.dragLine.setAttribute("y2", mouseY);
+    const mouse = this.getCanvasCoords(e);
+    this.dragLine.setAttribute("x2", mouse.x);
+    this.dragLine.setAttribute("y2", mouse.y);
   }
 
   finishConnectionDrag(e) {
     this.dragLine.style.display = "none";
+    const handleEl = e.target.closest(".connector-handle");
     const targetEl = e.target.closest(".mind-node");
 
     if (targetEl && this.connectingSourceId) {
@@ -1031,11 +1343,36 @@ class SynapseApp {
         );
 
         if (!exists) {
+          // ドロップ先のポート判定（ハンドル上で離された場合はそのポート、カード本体なら位置関係から最も近いポート）
+          let toPort = "top";
+          if (handleEl && handleEl.dataset.port) {
+            toPort = handleEl.dataset.port;
+          } else {
+            const toNode = this.nodes.find(n => n.id === targetId);
+            if (toNode) {
+              const mouse = this.getCanvasCoords(e);
+              const toEl = document.getElementById(`dom-${toNode.id}`);
+              const tw = toEl ? toEl.offsetWidth : (toNode.width || 250);
+              const th = toEl ? toEl.offsetHeight : (toNode.height || 96);
+              const cx = toNode.x + tw / 2;
+              const cy = toNode.y + th / 2;
+              const dx = mouse.x - cx;
+              const dy = mouse.y - cy;
+              if (Math.abs(dx) > Math.abs(dy)) {
+                toPort = dx < 0 ? "left" : "right";
+              } else {
+                toPort = dy < 0 ? "top" : "bottom";
+              }
+            }
+          }
+
           this.pushHistory();
           this.connections.push({
             id: `conn-${Date.now()}`,
             from: this.connectingSourceId,
-            to: targetId
+            to: targetId,
+            fromPort: this.connectingSourcePort || "bottom",
+            toPort: toPort
           });
           this.renderConnections();
           this.saveState();
@@ -1044,6 +1381,7 @@ class SynapseApp {
     }
 
     this.connectingSourceId = null;
+    this.connectingSourcePort = null;
   }
 
   // ==========================================
@@ -1222,7 +1560,8 @@ class SynapseApp {
     this.runAiBtn.textContent = "Geminiが思考パーツを分解中...";
     this.aiStatus.textContent = "AIに最適なモデルを探してリクエストを送信しています...";
 
-    const prompt = this.buildAnalysisPrompt(text);
+    const customInstruction = this.aiInstructionInput ? this.aiInstructionInput.value.trim() : "";
+    const prompt = this.buildAnalysisPrompt(text, customInstruction);
 
     const candidateModels = [
       "gemini-2.0-flash",
@@ -1328,7 +1667,8 @@ class SynapseApp {
 
   copyManualPrompt() {
     const text = this.manualSourceText.value.trim() || "（ここに論文や研究のメモが入ります）";
-    const fullPrompt = `${this.buildAnalysisPrompt(text)}\n\n必ず上記で指定されたJSONフォーマットのみを出力してください。`;
+    const customInstruction = this.manualInstructionInput ? this.manualInstructionInput.value.trim() : "";
+    const fullPrompt = `${this.buildAnalysisPrompt(text, customInstruction)}\n\n必ず上記で指定されたJSONフォーマットのみを出力してください。`;
 
     navigator.clipboard.writeText(fullPrompt).then(() => {
       alert("分析用プロンプトをクリップボードにコピーしました。\nWeb版Geminiに貼り付けて回答を取得してください。");
@@ -1364,12 +1704,22 @@ class SynapseApp {
     }
   }
 
-  buildAnalysisPrompt(sourceContent) {
+  buildAnalysisPrompt(sourceContent, customInstruction = "") {
+    let instructionSection = "";
+    if (customInstruction && customInstruction.trim()) {
+      instructionSection = `
+【ユーザーからの特別指示・着眼点（最重要要件）】:
+${customInstruction.trim()}
+※上記の指示・着眼点を最優先して思考パーツの抽出・分類を行ってください。
+
+`;
+    }
+
     return `あなたは研究支援の思考整理AIエキスパートです。
 以下の研究内容（論文テキスト、研究メモ、または添付された音声メモの録音内容）を総合的に読み込み・聴取し、
 「トップダウン（大きな問い・仮説・リサーチクエスチョン）」と「ボトムアップ（先行研究・実験データ・議論で出た知見・気付き）」に分解して、
 それぞれの思考パーツをJSON配列として出力してください。
-
+${instructionSection}
 【出力JSONフォーマット】:
 [
   {
@@ -1847,6 +2197,347 @@ ${sourceContent}
 
       this.projectsListContainer.appendChild(card);
     });
+  }
+
+  // ==========================================
+  // 13. Firebase クラウド認証 ＆ クラウド同期
+  // ==========================================
+  initFirebase() {
+    const firebaseConfig = {
+      apiKey: "AIzaSyAp7FGJR9LU6t0dry3UHG11x9aUgqx3hc8",
+      authDomain: "research-mindmap.firebaseapp.com",
+      projectId: "research-mindmap",
+      storageBucket: "research-mindmap.firebasestorage.app",
+      messagingSenderId: "192686554582",
+      appId: "1:192686554582:web:9aca885f87edb2c6003877",
+      measurementId: "G-36BLWQHHK2"
+    };
+
+    if (typeof firebase !== "undefined") {
+      try {
+        if (!firebase.apps || !firebase.apps.length) {
+          this.firebaseApp = firebase.initializeApp(firebaseConfig);
+        } else {
+          this.firebaseApp = firebase.app();
+        }
+        this.firebaseAuth = firebase.auth();
+        this.firestore = firebase.firestore();
+
+        // App Checkの防御準備（キー登録時に自動保護）
+        try {
+          if (firebase.appCheck && window.FIREBASE_APPCHECK_KEY) {
+            firebase.appCheck().activate(window.FIREBASE_APPCHECK_KEY, true);
+          }
+        } catch (acErr) {
+          console.log("App Check status:", acErr);
+        }
+
+        this.firebaseAuth.onAuthStateChanged((user) => {
+          this.handleAuthStateChanged(user);
+        });
+      } catch (e) {
+        console.warn("Firebase初期化通知:", e);
+      }
+    }
+  }
+
+  handleAuthStateChanged(user) {
+    this.currentUser = user;
+    if (user) {
+      // ログイン中
+      const displayName = user.email ? user.email.split("@")[0] : "ユーザー";
+      if (this.authBtnLabel) this.authBtnLabel.textContent = `👤 ${displayName}`;
+      if (this.syncStatusIndicator) {
+        this.syncStatusIndicator.className = "sync-dot sync-dot-online";
+        this.syncStatusIndicator.title = `クラウド同期中: ${user.email}`;
+      }
+      if (this.authUserEmail) this.authUserEmail.textContent = user.email;
+
+      // メール確認状況のバッジ反映
+      if (this.authEmailVerifiedBadge) {
+        if (user.emailVerified) {
+          this.authEmailVerifiedBadge.textContent = "メール認証済 🟢";
+          this.authEmailVerifiedBadge.className = "auth-verify-badge verified";
+          if (this.authVerifyWarning) this.authVerifyWarning.style.display = "none";
+        } else {
+          this.authEmailVerifiedBadge.textContent = "メール未確認 ⚠️";
+          this.authEmailVerifiedBadge.className = "auth-verify-badge unverified";
+          if (this.authVerifyWarning) this.authVerifyWarning.style.display = "block";
+        }
+      }
+
+      // クラウドから最新データを取得
+      this.pullFromCloud(false);
+    } else {
+      // 未ログイン（ログアウト）
+      if (this.authBtnLabel) this.authBtnLabel.textContent = "ログイン / 登録";
+      if (this.syncStatusIndicator) {
+        this.syncStatusIndicator.className = "sync-dot sync-dot-offline";
+        this.syncStatusIndicator.title = "未ログイン（ローカル保存）";
+      }
+    }
+  }
+
+  openAuthModal() {
+    if (!this.authModal) return;
+    this.clearAuthError();
+    if (this.currentUser) {
+      if (this.authLoggedInView) this.authLoggedInView.style.display = "block";
+      if (this.authFormsView) this.authFormsView.style.display = "none";
+
+      // モーダルを開いた時に最新の認証ステータスをリロード
+      this.currentUser.reload().then(() => {
+        if (this.authEmailVerifiedBadge) {
+          if (this.currentUser.emailVerified) {
+            this.authEmailVerifiedBadge.textContent = "メール認証済 🟢";
+            this.authEmailVerifiedBadge.className = "auth-verify-badge verified";
+            if (this.authVerifyWarning) this.authVerifyWarning.style.display = "none";
+          } else {
+            this.authEmailVerifiedBadge.textContent = "メール未確認 ⚠️";
+            this.authEmailVerifiedBadge.className = "auth-verify-badge unverified";
+            if (this.authVerifyWarning) this.authVerifyWarning.style.display = "block";
+          }
+        }
+      }).catch(() => {});
+    } else {
+      if (this.authLoggedInView) this.authLoggedInView.style.display = "none";
+      if (this.authFormsView) this.authFormsView.style.display = "block";
+      this.switchAuthTab("login");
+    }
+    this.authModal.style.display = "flex";
+  }
+
+  closeAuthModal() {
+    if (!this.authModal) return;
+    this.authModal.style.display = "none";
+    this.clearAuthError();
+  }
+
+  switchAuthTab(mode) {
+    this.authMode = mode;
+    this.clearAuthError();
+    if (mode === "login") {
+      this.authTabLogin?.classList.add("active");
+      this.authTabRegister?.classList.remove("active");
+      if (this.authTosContainer) this.authTosContainer.style.display = "none";
+      if (this.authSubmitBtn) this.authSubmitBtn.textContent = "ログインする";
+    } else {
+      this.authTabRegister?.classList.add("active");
+      this.authTabLogin?.classList.remove("active");
+      if (this.authTosContainer) this.authTosContainer.style.display = "block";
+      if (this.authTosCheckbox) this.authTosCheckbox.checked = false;
+      if (this.authSubmitBtn) this.authSubmitBtn.textContent = "アカウントを新規登録";
+    }
+  }
+
+  showAuthError(msg) {
+    if (this.authErrorMsg) {
+      this.authErrorMsg.textContent = msg;
+      this.authErrorMsg.style.display = "block";
+    }
+  }
+
+  clearAuthError() {
+    if (this.authErrorMsg) {
+      this.authErrorMsg.textContent = "";
+      this.authErrorMsg.style.display = "none";
+    }
+  }
+
+  async handleAuthSubmit() {
+    const email = this.authEmailInput ? this.authEmailInput.value.trim() : "";
+    const password = this.authPasswordInput ? this.authPasswordInput.value : "";
+
+    if (!email || !password) {
+      this.showAuthError("メールアドレスとパスワードを入力してください。");
+      return;
+    }
+
+    if (password.length < 6) {
+      this.showAuthError("パスワードは6文字以上で入力してください。");
+      return;
+    }
+
+    if (this.authMode === "register") {
+      if (this.authTosCheckbox && !this.authTosCheckbox.checked) {
+        this.showAuthError("登録を完了するには利用規約および免責事項への同意が必要です。");
+        return;
+      }
+    }
+
+    this.clearAuthError();
+    if (this.authSubmitBtn) {
+      this.authSubmitBtn.disabled = true;
+      this.authSubmitBtn.textContent = "処理中...";
+    }
+
+    try {
+      if (this.authMode === "login") {
+        await this.firebaseAuth.signInWithEmailAndPassword(email, password);
+        this.closeAuthModal();
+        alert(`🎉 ログインしました！（${email}）\nPCとスマホで同じノートが自動同期されます。`);
+      } else {
+        const userCred = await this.firebaseAuth.createUserWithEmailAndPassword(email, password);
+        const newUser = userCred.user;
+        if (newUser) {
+          try {
+            await newUser.sendEmailVerification();
+          } catch (e) {
+            console.warn("確認メール送信:", e);
+          }
+        }
+        // 新規登録時、現在キャンバスにあるカードがあればクラウドへ初回同期
+        await this.syncToCloud(true);
+        this.closeAuthModal();
+        alert(`🎉 アカウント登録が完了しました！（${email}）\n\n📧 確認メールを送信しました！メール内のリンクを開いて認証を完了してください。\n（※認証前でもすぐにノートをご利用いただけます）`);
+      }
+    } catch (err) {
+      const code = err.code || "";
+      let message = "ログイン・登録に失敗しました。";
+      if (code === "auth/invalid-email") message = "メールアドレスの形式が正しくありません。";
+      else if (code === "auth/user-not-found" || code === "auth/wrong-password" || code === "auth/invalid-credential") message = "メールアドレスまたはパスワードが間違っています。";
+      else if (code === "auth/email-already-in-use") message = "このメールアドレスは既に登録されています。「ログイン」タブをお試しください。";
+      else if (code === "auth/weak-password") message = "パスワードが安全ではありません（6文字以上必要です）。";
+      else message = err.message;
+      this.showAuthError(message);
+    } finally {
+      if (this.authSubmitBtn) {
+        this.authSubmitBtn.disabled = false;
+        this.authSubmitBtn.textContent = this.authMode === "login" ? "ログインする" : "アカウントを新規登録";
+      }
+    }
+  }
+
+  async handleResendVerificationEmail() {
+    if (!this.currentUser) return;
+    try {
+      await this.currentUser.sendEmailVerification();
+      alert(`📧「${this.currentUser.email}」へ確認メールを再送信しました！メールボックスをご確認ください。`);
+    } catch (err) {
+      alert("確認メールの再送に失敗しました: " + err.message);
+    }
+  }
+
+  async handleDeleteAccount() {
+    if (!this.currentUser || !this.firebaseAuth) return;
+
+    const email = this.currentUser.email;
+    const ok1 = confirm(`【⚠️ 警告】\nアカウント（${email}）と、クラウド上のすべてのノートデータを完全に消去しますか？\n\n※この操作は取り消せません。`);
+    if (!ok1) return;
+
+    const ok2 = confirm(`【最終確認】\n本当に退会してよろしいですか？\nカードデータがすべて消去されます。`);
+    if (!ok2) return;
+
+    try {
+      const uid = this.currentUser.uid;
+      if (this.firestore) {
+        try {
+          await this.firestore.collection("users").doc(uid).delete();
+        } catch (e) {}
+      }
+      await this.currentUser.delete();
+      this.currentUser = null;
+      this.closeAuthModal();
+      alert(`アカウント（${email}）およびクラウド上のデータをすべて消去（退会）しました。ご利用ありがとうございました。`);
+    } catch (err) {
+      if (err.code === "auth/requires-recent-login") {
+        alert("セキュリティのため、直前の再ログインが必要です。一度ログアウトして再度ログインしてから、退会操作をお試しください。");
+      } else {
+        alert("アカウント削除エラー: " + err.message);
+      }
+    }
+  }
+
+  async handleLogout() {
+    if (!this.firebaseAuth) return;
+    try {
+      await this.firebaseAuth.signOut();
+      this.closeAuthModal();
+      alert("ログアウトしました。（ローカルモードに戻りました）");
+    } catch (e) {
+      alert("ログアウトエラー: " + e.message);
+    }
+  }
+
+  syncToCloud(immediate = false) {
+    if (!this.currentUser || !this.firestore) return;
+
+    const doSync = async () => {
+      try {
+        const payload = {
+          nodes: this.nodes,
+          connections: this.connections,
+          pan: this.pan,
+          zoom: this.zoom,
+          projects: this.getProjectsList(),
+          activeProjectId: this.currentProjectId,
+          activeProjectName: this.currentProjectName,
+          updatedAt: new Date().toISOString()
+        };
+        await this.firestore.collection("users").doc(this.currentUser.uid).set(payload, { merge: true });
+        if (this.syncStatusIndicator) {
+          this.syncStatusIndicator.className = "sync-dot sync-dot-online";
+        }
+      } catch (err) {
+        console.warn("クラウド同期エラー:", err);
+      }
+    };
+
+    if (immediate) {
+      return doSync();
+    }
+
+    clearTimeout(this.syncDebounceTimer);
+    this.syncDebounceTimer = setTimeout(doSync, 800);
+  }
+
+  async pullFromCloud(notify = false) {
+    if (!this.currentUser || !this.firestore) return;
+
+    try {
+      const docSnap = await this.firestore.collection("users").doc(this.currentUser.uid).get();
+      if (docSnap.exists) {
+        const data = docSnap.data();
+        if (data && Array.isArray(data.nodes)) {
+          this.pushHistory();
+          this.nodes = data.nodes;
+          this.connections = Array.isArray(data.connections) ? data.connections : [];
+          if (data.pan) this.pan = data.pan;
+          if (data.zoom) this.zoom = data.zoom;
+          if (Array.isArray(data.projects)) this.saveProjectsList(data.projects);
+          if (data.activeProjectId) {
+            this.currentProjectId = data.activeProjectId;
+            this.currentProjectName = data.activeProjectName || "プロジェクト";
+          }
+
+          this.deselectAll();
+          this.render();
+          this.updateCanvasTransform();
+
+          const localPayload = {
+            nodes: this.nodes,
+            connections: this.connections,
+            pan: this.pan,
+            zoom: this.zoom,
+            projectId: this.currentProjectId,
+            projectName: this.currentProjectName,
+            updatedAt: data.updatedAt || new Date().toISOString()
+          };
+          localStorage.setItem("synapse_notebook_data_v2", JSON.stringify(localPayload));
+
+          if (notify) {
+            alert(`☁️ クラウドから最新データ（カード${this.nodes.length}枚）を取得して反映しました！`);
+          }
+        }
+      } else {
+        if (this.nodes.length > 0) {
+          await this.syncToCloud(true);
+        }
+      }
+    } catch (err) {
+      console.warn("クラウドデータ取得エラー:", err);
+      if (notify) alert("クラウドデータの取得に失敗しました: " + err.message);
+    }
   }
 
   escapeHtml(str) {
