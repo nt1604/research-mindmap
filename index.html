@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Synapse Research - 思考整理・研究ノート</title>
+  <meta name="description" content="トップダウンの問いとボトムアップの知見を統合する、温かみのある研究思考整理ノート。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;1,400&family=Noto+Serif+JP:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- PDF解析ライブラリ (Mozilla pdf.js) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- ヘッダーツールバー -->
+    <header class="app-header">
+      <div class="logo-area">
+        <svg class="logo-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6l2.1-2.1"></path>
+        </svg>
+        <h1>Synapse <span>Notebook</span></h1>
+        <span class="badge">Research Map</span>
+      </div>
+
+      <div class="toolbar-center">
+        <!-- トップダウン追加ボタン -->
+        <button id="add-topdown-btn" class="btn btn-topdown" title="大きな問い・仮説（上から掘り下げる）">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+          <span class="btn-text">問い・仮説 <span class="btn-subtext">(Top-down)</span></span>
+        </button>
+        <!-- ボトムアップ追加ボタン -->
+        <button id="add-bottomup-btn" class="btn btn-bottomup" title="先行研究・実験データ（下から積み上げる）">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          <span class="btn-text">知見・メモ <span class="btn-subtext">(Bottom-up)</span></span>
+        </button>
+        <!-- 統合追加ボタン -->
+        <button id="add-synthesis-btn" class="btn btn-synthesis" title="2つが出会う検証結果・結論">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+          <span class="btn-text">検証・合流 <span class="btn-subtext">(Synthesis)</span></span>
+        </button>
+      </div>
+
+      <div class="toolbar-right">
+        <!-- プロジェクトセーブ・管理ボタン -->
+        <button id="manage-projects-btn" class="btn btn-primary" title="プロジェクトの保存・切り替え">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+          <span class="btn-label">セーブ管理</span>
+        </button>
+        <!-- 巻き戻し（Undo）ボタン -->
+        <button id="undo-btn" class="btn btn-ghost" title="直前の操作を取り消す (Ctrl+Z)">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>
+          <span class="btn-label">巻き戻し</span>
+        </button>
+        <button id="toggle-ai-btn" class="btn btn-ghost" title="研究アシスタントを開く">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          <span class="btn-label">AI支援</span>
+        </button>
+        <button id="export-json-btn" class="btn btn-ghost" title="ノートデータを書き出す">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+          <span class="btn-label">書き出し</span>
+        </button>
+        <label class="btn btn-ghost file-input-label" title="保存したデータを読み込む">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+          <span class="btn-label">読み込み</span>
+          <input type="file" id="import-json-input" accept=".json" style="display:none;">
+        </label>
+        <button id="reset-canvas-btn" class="btn btn-subtle-danger" title="キャンバスを更地（まっさら）にする">
+          <span class="btn-label">更地にする</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- メインレイアウト -->
+    <main class="main-layout">
+      <!-- 左側：AI・ファイル解析パネル -->
+      <aside id="ai-sidebar" class="sidebar ai-sidebar">
+        <div class="sidebar-header">
+          <h2>研究支援アシスタント</h2>
+          <button id="close-ai-btn" class="icon-btn" aria-label="閉じる">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="ai-tabs">
+          <button id="tab-auto" class="ai-tab active">API自動解析</button>
+          <button id="tab-manual" class="ai-tab">手動コピペ (完全無料)</button>
+        </div>
+
+        <!-- タブ1: API連携 -->
+        <div id="ai-panel-auto" class="ai-tab-content active">
+          <div class="form-group">
+            <label for="gemini-api-key">Gemini API Key (無料枠):</label>
+            <input type="password" id="gemini-api-key" placeholder="AI Studioの無料キーを貼り付け">
+            <small class="hint">お使いのブラウザ内部にのみ安全に記憶されます。</small>
+          </div>
+
+          <div class="form-group">
+            <label for="ai-file-input">論文・メモ・音声録音（複数選択可）:</label>
+            <div id="drop-zone" class="drop-zone">
+              <svg class="drop-icon-svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+              <p>PDF・テキスト・ボイスメモをドロップ<br>またはクリックして選択 (.pdf, .mp3, .m4a等)</p>
+              <input type="file" id="ai-file-input" accept=".txt,.md,.pdf,.json,.mp3,.wav,.m4a,.ogg,.webm" multiple style="display:none;">
+            </div>
+            <!-- 添付されたファイル一覧 -->
+            <div id="attached-files-container" class="attached-files-container" style="display:none;">
+              <div class="attached-header">
+                <span>添付中のファイル (<span id="attached-count">0</span>):</span>
+                <button id="clear-files-btn" class="text-link-btn">すべてクリア</button>
+              </div>
+              <ul id="attached-files-list" class="attached-files-list"></ul>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="ai-text-input">またはテキストを直接入力・編集:</label>
+            <textarea id="ai-text-input" rows="4" placeholder="研究の概要や論文の要約をペースト..."></textarea>
+          </div>
+
+          <button id="run-ai-generate-btn" class="btn btn-primary btn-block">
+            思考パーツを解析して確認する
+          </button>
+        </div>
+
+        <!-- タブ2: 手動コピペ -->
+        <div id="ai-panel-manual" class="ai-tab-content">
+          <div class="notice-card">
+            <div class="notice-title">手動コピペの使い方</div>
+            <p>1. 分析したい内容を入力してプロンプトをコピー<br>2. Web版Geminiに貼り付けて質問<br>3. 返ってきた回答をペーストして確認</p>
+          </div>
+
+          <div class="form-group">
+            <label for="manual-source-text">分析させたい研究内容・メモ:</label>
+            <textarea id="manual-source-text" rows="4" placeholder="論文の要約や自分の研究アイデアを入力..."></textarea>
+          </div>
+
+          <button id="copy-prompt-btn" class="btn btn-secondary btn-block">
+            1. 分析用プロンプトをコピー
+          </button>
+
+          <div class="form-group" style="margin-top: 18px;">
+            <label for="manual-result-json">2. Geminiからの回答を貼り付け:</label>
+            <textarea id="manual-result-json" rows="4" placeholder="Geminiの回答テキストをそのままペースト..."></textarea>
+          </div>
+
+          <button id="apply-manual-result-btn" class="btn btn-primary btn-block">
+            3. カードを確認して展開
+          </button>
+        </div>
+
+        <div id="ai-status" class="ai-status"></div>
+      </aside>
+
+      <!-- 中央：キャンバス -->
+      <section class="canvas-container" id="canvas-container">
+        <!-- ズーム操作 -->
+        <div class="canvas-controls">
+          <button id="zoom-in-btn" class="control-btn" title="拡大">+</button>
+          <button id="zoom-out-btn" class="control-btn" title="縮小">−</button>
+          <button id="zoom-reset-btn" class="control-btn" title="初期位置">⟲</button>
+          <span id="zoom-level" class="zoom-text">100%</span>
+        </div>
+
+        <!-- 更地時の案内プレースホルダー（ノードが0個の時のみ表示） -->
+        <div id="canvas-empty-state" class="canvas-empty-state">
+          <div class="empty-box">
+            <h3>キャンバスはまっさらです</h3>
+            <p>上のボタンから「問い・仮説」や「知見・メモ」を追加するか、<br>「AI支援」から論文PDFを投入してカードを生成してみましょう。</p>
+          </div>
+        </div>
+
+        <!-- 拡大・パンするキャンバスボード -->
+        <div id="canvas" class="canvas-board">
+          <!-- 接続線レイヤー -->
+          <svg id="connections-layer" class="connections-svg">
+            <defs>
+              <!-- 終点矢印（各色） -->
+              <marker id="arrow-default" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#8c857b" />
+              </marker>
+              <marker id="arrow-green" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+              </marker>
+              <marker id="arrow-red" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
+              </marker>
+              <marker id="arrow-blue" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d4f7c" />
+              </marker>
+              <marker id="arrow-amber" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309" />
+              </marker>
+
+              <!-- 始点矢印（双方向用） -->
+              <marker id="arrow-start-default" viewBox="0 0 10 10" refX="3" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill="#8c857b" />
+              </marker>
+              <marker id="arrow-start-green" viewBox="0 0 10 10" refX="3" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill="#10b981" />
+              </marker>
+              <marker id="arrow-start-red" viewBox="0 0 10 10" refX="3" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill="#ef4444" />
+              </marker>
+              <marker id="arrow-start-blue" viewBox="0 0 10 10" refX="3" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill="#2d4f7c" />
+              </marker>
+              <marker id="arrow-start-amber" viewBox="0 0 10 10" refX="3" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill="#b45309" />
+              </marker>
+            </defs>
+          </svg>
+
+          <!-- 矢印スタイル変更フローティングツールバー -->
+          <div id="connection-toolbar" class="connection-toolbar" style="display:none;">
+            <!-- 線の種類（実線・破線・点線） -->
+            <div class="toolbar-group">
+              <button class="conn-tool-btn" data-action="style" data-val="solid" title="実線（直接の因果・証明）">―</button>
+              <button class="conn-tool-btn" data-action="style" data-val="dashed" title="破線（仮説・示唆）">╌</button>
+              <button class="conn-tool-btn" data-action="style" data-val="dotted" title="点線（間接的な関連）">┄</button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <!-- 矢印の向き -->
+            <div class="toolbar-group">
+              <button class="conn-tool-btn" data-action="arrow" data-val="forward" title="片方向（→）">→</button>
+              <button class="conn-tool-btn" data-action="arrow" data-val="both" title="双方向（↔）">↔</button>
+              <button class="conn-tool-btn" data-action="arrow" data-val="none" title="矢印なし">―</button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <!-- 線の太さ -->
+            <div class="toolbar-group">
+              <button class="conn-tool-btn" data-action="width" data-val="thin" title="細め">細</button>
+              <button class="conn-tool-btn" data-action="width" data-val="normal" title="標準">中</button>
+              <button class="conn-tool-btn" data-action="width" data-val="thick" title="太め（主軸）">太</button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <!-- 線の色 -->
+            <div class="toolbar-group colors-group">
+              <button class="conn-color-dot color-default" data-action="color" data-val="default" title="標準（グレー）"></button>
+              <button class="conn-color-dot color-green" data-action="color" data-val="green" title="支持・肯定（グリーン）"></button>
+              <button class="conn-color-dot color-red" data-action="color" data-val="red" title="対立・矛盾（レッド）"></button>
+              <button class="conn-color-dot color-blue" data-action="color" data-val="blue" title="仮説・展開（ブルー）"></button>
+              <button class="conn-color-dot color-amber" data-action="color" data-val="amber" title="検証中・注意（琥珀）"></button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <!-- 削除ボタン -->
+            <button id="conn-delete-btn" class="conn-delete-btn" title="この接続を削除 (右クリックでも即解除可能)">✕</button>
+          </div>
+
+          <!-- ドラッグ中の接続線プレビュー -->
+          <svg id="drag-line-layer" class="connections-svg">
+            <line id="drag-line" x1="0" y1="0" x2="0" y2="0" stroke="#2d4f7c" stroke-dasharray="4,4" stroke-width="2" style="display:none;" />
+          </svg>
+
+          <!-- ノード群 -->
+          <div id="nodes-container"></div>
+        </div>
+      </section>
+
+      <!-- 右側：詳細ノートパネル -->
+      <aside id="note-sidebar" class="sidebar note-sidebar">
+        <div class="sidebar-header">
+          <div class="node-badge-type" id="note-type-badge">カード詳細</div>
+          <button id="close-note-btn" class="icon-btn" aria-label="閉じる">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div id="note-editor" class="note-editor-body">
+          <div class="note-empty-state" id="note-empty-state">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#a39d93" stroke-width="1.4"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+            <p>カードを選択すると、研究メモや考察を<br>じっくり編集・執筆できます。</p>
+          </div>
+
+          <div class="note-content" id="note-active-content" style="display:none;">
+            <div class="form-group">
+              <label for="node-title-input">タイトル / 要約:</label>
+              <input type="text" id="node-title-input" class="note-input-title" placeholder="テーマや問いを入力...">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="node-type-select">属性:</label>
+                <select id="node-type-select">
+                  <option value="topdown">問い・仮説 (Top-down)</option>
+                  <option value="bottomup">知見・データ (Bottom-up)</option>
+                  <option value="synthesis">検証・合流 (Synthesis)</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label for="node-status-select">ステータス:</label>
+                <select id="node-status-select">
+                  <option value="idea">構想・着想</option>
+                  <option value="in_progress">検証中・調査中</option>
+                  <option value="verified">検証完了・支持</option>
+                  <option value="rejected">棄却・矛盾</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="node-body-input">詳細ノート・先行研究引用・考察:</label>
+              <textarea id="node-body-input" rows="13" placeholder="考察、論文の書誌情報、実験結果、疑問点などを自由に記述..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="node-tags-input">タグ (カンマ区切り):</label>
+              <input type="text" id="node-tags-input" placeholder="認知科学, 先行研究, 2026...">
+            </div>
+
+            <div class="note-actions">
+              <button id="delete-node-btn" class="btn btn-subtle-danger" type="button">
+                このカードを削除
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ★ 新機能：カード追加前の確認・選別モーダルポップアップ -->
+    <div id="preview-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>追加予定のカードの確認・編集</h3>
+            <p>意図した分類になっているか確認し、不要なカードは削除や編集ができます。</p>
+          </div>
+          <button id="close-modal-btn" class="icon-btn" aria-label="閉じる">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div id="preview-cards-list" class="preview-cards-list">
+            <!-- 動的に生成されたカードのプレビュー行が挿入されます -->
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="add-manual-preview-card-btn" class="btn btn-secondary">
+            + カードを1枚追加
+          </button>
+          <div class="modal-footer-actions">
+            <button id="cancel-preview-btn" class="btn btn-ghost">キャンセル</button>
+            <button id="confirm-preview-btn" class="btn btn-primary">
+              <span id="confirm-btn-count">0</span> 枚のカードをノートに配置する
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ★ プロジェクト別セーブ・ロード管理モーダル -->
+    <div id="projects-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-card projects-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>プロジェクト管理・セーブ</h3>
+            <p>テーマごとに名前をつけて保存し、いつでも切り替えられます。</p>
+          </div>
+          <button id="close-projects-modal-btn" class="icon-btn" aria-label="閉じる">✕</button>
+        </div>
+
+        <div class="modal-body projects-modal-body">
+          <!-- 新規保存エリア -->
+          <div class="project-save-section">
+            <label for="new-project-name" class="project-section-title">現在のキャンバスに名前をつけて保存:</label>
+            <div class="project-save-input-row">
+              <input type="text" id="new-project-name" placeholder="例: 卒論_実験テーマA, 先行研究サーベイ...">
+              <button id="save-new-project-btn" class="btn btn-primary" style="white-space:nowrap;">
+                保存する
+              </button>
+            </div>
+            <div id="current-project-status" class="current-project-status"></div>
+          </div>
+
+          <!-- 保存済みプロジェクト一覧 -->
+          <div class="project-list-section">
+            <div class="project-list-header">
+              <span class="project-section-title">保存済みプロジェクト一覧</span>
+              <span id="saved-project-count" class="badge">0 件</span>
+            </div>
+            <div id="projects-list-container" class="projects-list-container">
+              <!-- 動的にプロジェクト一覧カードが挿入されます -->
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <div class="modal-footer-left">
+            <span class="hint" style="margin:0;">※ OneDriveやUSBメモリにバックアップしたい時は「書き出し」をご利用ください</span>
+          </div>
+          <button id="close-projects-btn" class="btn btn-secondary">閉じる</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
