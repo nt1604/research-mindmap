@@ -2,13 +2,13 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Synapse Research - 思考整理・研究ノート</title>
   <meta name="description" content="トップダウンの問いとボトムアップの知見を統合する、温かみのある研究思考整理ノート。">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;1,400&family=Noto+Serif+JP:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2.8">
   <!-- PDF解析ライブラリ (Mozilla pdf.js) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <!-- Firebase クラウド認証・データベース・App Check SDK (Compat) -->
@@ -50,6 +50,11 @@
         <button id="add-custom-btn" class="btn btn-custom" title="自由な枠組み（課題・TODO・メモなど）">
           <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
           <span class="btn-text">その他 <span class="btn-subtext">(Custom)</span></span>
+        </button>
+        <!-- グループ枠追加ボタン -->
+        <button id="add-group-btn" class="btn btn-secondary" title="キャンバス上に色付きグループ枠を配置">
+          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3" ry="3" stroke-dasharray="3 3"/><path d="M8 12h8m-4-4v8"/></svg>
+          <span class="btn-text">＋ グループ</span>
         </button>
       </div>
 
@@ -212,6 +217,8 @@
 
         <!-- 拡大・パンするキャンバスボード -->
         <div id="canvas" class="canvas-board">
+          <!-- グループ枠レイヤー（カードの背面に配置） -->
+          <div id="groups-container"></div>
           <!-- 接続線レイヤー -->
           <svg id="connections-layer" class="connections-svg">
             <defs>
@@ -253,6 +260,12 @@
 
           <!-- 矢印スタイル変更フローティングツールバー -->
           <div id="connection-toolbar" class="connection-toolbar" style="display:none;">
+            <!-- 線の形状（曲線・直線） -->
+            <div class="toolbar-group">
+              <button class="conn-tool-btn" data-action="shape" data-val="curve" title="滑らかな曲線（ベジェ）">〰</button>
+              <button class="conn-tool-btn" data-action="shape" data-val="straight" title="直線（ダイレクト）">━</button>
+            </div>
+            <div class="toolbar-divider"></div>
             <!-- 線の種類（実線・破線・点線） -->
             <div class="toolbar-group">
               <button class="conn-tool-btn" data-action="style" data-val="solid" title="実線（直接の因果・証明）">―</button>
@@ -360,6 +373,14 @@
             <div class="form-group">
               <label for="node-body-input">詳細ノート・先行研究引用・考察:</label>
               <textarea id="node-body-input" rows="13" placeholder="考察、論文の書誌情報、実験結果、疑問点などを自由に記述..."></textarea>
+            </div>
+
+            <!-- 所属グループ選択 -->
+            <div class="form-group" id="node-group-select-group">
+              <label for="node-group-select">所属グループ:</label>
+              <select id="node-group-select">
+                <option value="">⚪ 無所属（白・なし）</option>
+              </select>
             </div>
 
             <div class="form-group">
@@ -581,6 +602,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=2.8"></script>
 </body>
 </html>

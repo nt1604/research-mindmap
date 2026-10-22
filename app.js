@@ -7,6 +7,13 @@ class SynapseApp {
   constructor() {
     this.nodes = [];
     this.connections = [];
+    this.groups = [];
+    this.draggingGroup = null;
+    this.groupDragOffset = { x: 0, y: 0 };
+    this.groupMemberNodes = [];
+    this.resizingGroup = null;
+    this.startGroupResize = null;
+    this.aimSnappedPort = null;
     this.selectedNodeId = null;
     this.selectedConnectionId = null;
 
@@ -41,6 +48,10 @@ class SynapseApp {
 
     // 接続線ドラッグ状態
     this.connectingSourceId = null;
+
+    // タッチ・Apple Pencil・ピンチズーム状態
+    this.isUsingStylus = false;
+    this.stylusTimeout = null;
     this.connectingSourcePort = null;
 
     // Firebase クラウド同期状態
@@ -64,6 +75,9 @@ class SynapseApp {
     this.render();
     this.updateCanvasTransform();
 
+    // タッチ＆Apple Pencilジェスチャーの初期化
+    this.initTouchAndGestures();
+
     // Firebaseの初期化
     this.initFirebase();
   }
@@ -71,6 +85,7 @@ class SynapseApp {
   cacheDom() {
     this.container = document.getElementById("canvas-container");
     this.board = document.getElementById("canvas");
+    this.groupsContainer = document.getElementById("groups-container");
     this.nodesContainer = document.getElementById("nodes-container");
     this.connectionsSvg = document.getElementById("connections-layer");
     this.dragLineLayer = document.getElementById("drag-line-layer");
@@ -88,6 +103,7 @@ class SynapseApp {
     this.addBottomupBtn = document.getElementById("add-bottomup-btn");
     this.addSynthesisBtn = document.getElementById("add-synthesis-btn");
     this.addCustomBtn = document.getElementById("add-custom-btn");
+    this.addGroupBtn = document.getElementById("add-group-btn");
     this.hamburgerMenuBtn = document.getElementById("hamburger-menu-btn");
     this.hamburgerDropdown = document.getElementById("hamburger-dropdown");
     this.undoBtn = document.getElementById("undo-btn");
@@ -109,6 +125,7 @@ class SynapseApp {
     this.nodeStatusSelect = document.getElementById("node-status-select");
     this.nodeBodyInput = document.getElementById("node-body-input");
     this.nodeTagsInput = document.getElementById("node-tags-input");
+    this.nodeGroupSelect = document.getElementById("node-group-select");
     this.deleteNodeBtn = document.getElementById("delete-node-btn");
 
     // AIサイドバー
@@ -195,9 +212,11 @@ class SynapseApp {
   // キャンバス上の座標をマウス位置から100%正確に取得（ヘッダー余白・ズーム・パン完全補正）
   getCanvasCoords(e) {
     const rect = this.container.getBoundingClientRect();
+    const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : (e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientX : 0));
+    const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : (e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientY : 0));
     return {
-      x: (e.clientX - rect.left - this.pan.x) / this.zoom,
-      y: (e.clientY - rect.top - this.pan.y) / this.zoom
+      x: (clientX - rect.left - this.pan.x) / this.zoom,
+      y: (clientY - rect.top - this.pan.y) / this.zoom
     };
   }
 
@@ -220,6 +239,7 @@ class SynapseApp {
         if (Array.isArray(data.nodes) && data.nodes.length > 0) {
           this.nodes = data.nodes;
           this.connections = Array.isArray(data.connections) ? data.connections : [];
+          this.groups = Array.isArray(data.groups) ? data.groups : [];
           if (data.pan) this.pan = data.pan;
           if (data.zoom) this.zoom = data.zoom;
           loaded = true;
@@ -324,6 +344,7 @@ class SynapseApp {
     const data = {
       nodes: this.nodes,
       connections: this.connections,
+      groups: this.groups,
       pan: this.pan,
       zoom: this.zoom,
       projectId: this.currentProjectId,
@@ -365,7 +386,8 @@ class SynapseApp {
   pushHistory() {
     const snapshot = {
       nodes: JSON.parse(JSON.stringify(this.nodes)),
-      connections: JSON.parse(JSON.stringify(this.connections))
+      connections: JSON.parse(JSON.stringify(this.connections)),
+      groups: JSON.parse(JSON.stringify(this.groups))
     };
     this.history.push(snapshot);
     if (this.history.length > this.maxHistory) {
@@ -382,6 +404,7 @@ class SynapseApp {
     const previous = this.history.pop();
     this.nodes = previous.nodes;
     this.connections = previous.connections;
+    this.groups = previous.groups || [];
     this.deselectAll();
     this.render();
     this.saveState();
@@ -390,6 +413,217 @@ class SynapseApp {
   // ==========================================
   // 4. イベントリスナー登録
   // ==========================================
+
+  // ==========================================
+  // タッチ・ピンチズーム・Apple Pencil 操作
+  // ==========================================
+  initTouchAndGestures() {
+    let touchStartPan = { x: 0, y: 0 };
+    let pinchStartDist = 0;
+    let pinchStartZoom = 1.0;
+    let isPinching = false;
+    let isSingleTouchPanning = false;
+
+    this.container.addEventListener("touchstart", (e) => {
+      // 2本指ピンチズーム
+      if (e.touches.length === 2) {
+        isPinching = true;
+        isSingleTouchPanning = false;
+        this.isPanning = false;
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        pinchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        pinchStartZoom = this.zoom;
+        e.preventDefault();
+        return;
+      }
+
+      // 1本指操作
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+
+        // Apple Pencil判定（iOS touchType === 'stylus'）
+        if (touch.touchType === "stylus") {
+          this.isUsingStylus = true;
+          clearTimeout(this.stylusTimeout);
+          this.stylusTimeout = setTimeout(() => { this.isUsingStylus = false; }, 800);
+        } else if (this.isUsingStylus && (touch.radiusX > 25 || touch.radiusY > 25)) {
+          // パームリジェクション: ペンシル使用中の手のひら誤タッチを無視
+          return;
+        }
+
+        const target = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (
+          target && (
+            target.closest(".mind-node") ||
+            target.closest(".connector-handle") ||
+            target.closest(".group-frame") ||
+            target.closest("#connection-toolbar") ||
+            target.closest(".canvas-controls") ||
+            target.closest(".sidebar")
+          )
+        ) {
+          return;
+        }
+
+        isSingleTouchPanning = true;
+        this.isPanning = true;
+        this.container.classList.add("panning");
+        touchStartPan = { x: touch.clientX - this.pan.x, y: touch.clientY - this.pan.y };
+        this.deselectAll();
+      }
+    }, { passive: false });
+
+    window.addEventListener("touchmove", (e) => {
+      // 2本指ピンチズーム＆拡大縮小
+      if (isPinching && e.touches.length === 2) {
+        e.preventDefault();
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const newDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        if (pinchStartDist > 0) {
+          const scale = newDist / pinchStartDist;
+          const midX = (t1.clientX + t2.clientX) / 2;
+          const midY = (t1.clientY + t2.clientY) / 2;
+          const targetZoom = Math.min(2.5, Math.max(0.4, pinchStartZoom * scale));
+          const rect = this.container.getBoundingClientRect();
+          const mouseX = midX - rect.left;
+          const mouseY = midY - rect.top;
+          this.pan.x = mouseX - (mouseX - this.pan.x) * (targetZoom / this.zoom);
+          this.pan.y = mouseY - (mouseY - this.pan.y) * (targetZoom / this.zoom);
+          this.zoom = Math.round(targetZoom * 100) / 100;
+          this.updateCanvasTransform();
+          this.updateZoomDisplay();
+        }
+        return;
+      }
+
+      // 1本指キャンバススクロール（パン）
+      if (isSingleTouchPanning && e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.pan.x = touch.clientX - touchStartPan.x;
+        this.pan.y = touch.clientY - touchStartPan.y;
+        this.updateCanvasTransform();
+        return;
+      }
+
+      // カードドラッグ移動（指またはApple Pencil）
+      if (this.draggingNode && e.touches.length === 1) {
+        e.preventDefault();
+        this.hasDragged = true;
+        const touch = e.touches[0];
+        const mouse = this.getCanvasCoords(touch);
+        this.draggingNode.x = Math.max(20, Math.round(mouse.x - this.dragOffset.x));
+        this.draggingNode.y = Math.max(20, Math.round(mouse.y - this.dragOffset.y));
+        this.updateNodePosition(this.draggingNode);
+        this.renderConnections();
+        return;
+      }
+
+      // コネクタ矢印引き（指またはApple Pencil）
+      if (this.connectingSourceId && e.touches.length === 1) {
+        e.preventDefault();
+        this.updateDragLine(e.touches[0]);
+        return;
+      }
+
+      // グループ枠ドラッグ移動
+      if (this.draggingGroup && e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const mouse = this.getCanvasCoords(touch);
+        const newX = Math.round(mouse.x - this.groupDragOffset.x);
+        const newY = Math.round(mouse.y - this.groupDragOffset.y);
+        const deltaX = newX - this.draggingGroup.x;
+        const deltaY = newY - this.draggingGroup.y;
+        this.draggingGroup.x = newX;
+        this.draggingGroup.y = newY;
+        const el = document.getElementById(`dom-group-${this.draggingGroup.id}`);
+        if (el) {
+          el.style.left = `${newX}px`;
+          el.style.top = `${newY}px`;
+        }
+        this.groupMemberNodes.forEach(node => {
+          node.x += deltaX;
+          node.y += deltaY;
+          this.updateNodePosition(node);
+        });
+        this.renderConnections();
+        return;
+      }
+
+      // カードリサイズ
+      if (this.resizingNode && e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const deltaX = (touch.clientX - this.startResize.clientX) / this.zoom;
+        const deltaY = (touch.clientY - this.startResize.clientY) / this.zoom;
+        const newWidth = Math.max(160, Math.round(this.startResize.startWidth + deltaX));
+        this.resizingNode.width = newWidth;
+        const el = document.getElementById(`dom-${this.resizingNode.id}`);
+        if (el) el.style.width = `${newWidth}px`;
+        if (!this.resizingNode.collapsed) {
+          const newHeight = Math.max(70, Math.round(this.startResize.startHeight + deltaY));
+          this.resizingNode.height = newHeight;
+          if (el) {
+            el.style.height = `${newHeight}px`;
+            el.classList.add("has-custom-height");
+          }
+        }
+        this.renderConnections();
+        return;
+      }
+    }, { passive: false });
+
+    window.addEventListener("touchend", (e) => {
+      if (isPinching) {
+        isPinching = false;
+        this.saveState();
+      }
+      if (isSingleTouchPanning) {
+        isSingleTouchPanning = false;
+        this.isPanning = false;
+        this.container.classList.remove("panning");
+        this.saveState();
+      }
+      if (this.draggingNode) {
+        if (this.hasDragged) {
+          this.saveState();
+        }
+        this.draggingNode = null;
+        this.hasDragged = false;
+      }
+      if (this.draggingGroup) {
+        this.draggingGroup = null;
+        this.groupMemberNodes = [];
+        this.saveState();
+      }
+      if (this.resizingNode) {
+        this.resizingNode = null;
+        this.startResize = null;
+        this.saveState();
+      }
+      if (this.connectingSourceId) {
+        const touch = e.changedTouches ? e.changedTouches[0] : null;
+        this.finishConnectionDrag(touch || e);
+      }
+    });
+
+    window.addEventListener("touchcancel", () => {
+      isPinching = false;
+      isSingleTouchPanning = false;
+      this.isPanning = false;
+      this.container.classList.remove("panning");
+      this.draggingNode = null;
+      this.draggingGroup = null;
+      this.resizingNode = null;
+      if (this.connectingSourceId) {
+        this.finishConnectionDrag(null);
+      }
+    });
+  }
+
   bindEvents() {
     // ツールバー
     this.addTopdownBtn.addEventListener("click", () => this.addNewNode("topdown"));
@@ -397,6 +631,9 @@ class SynapseApp {
     this.addSynthesisBtn.addEventListener("click", () => this.addNewNode("synthesis"));
     if (this.addCustomBtn) {
       this.addCustomBtn.addEventListener("click", () => this.addNewNode("custom"));
+    }
+    if (this.addGroupBtn) {
+      this.addGroupBtn.addEventListener("click", () => this.addNewGroup());
     }
     if (this.undoBtn) {
       this.undoBtn.addEventListener("click", () => this.undo());
@@ -459,7 +696,39 @@ class SynapseApp {
     });
 
     window.addEventListener("mousemove", (e) => {
-      if (this.resizingNode) {
+      if (this.resizingGroup) {
+        const deltaX = (e.clientX - this.startGroupResize.clientX) / this.zoom;
+        const deltaY = (e.clientY - this.startGroupResize.clientY) / this.zoom;
+        const newW = Math.max(220, Math.round(this.startGroupResize.startW + deltaX));
+        const newH = Math.max(120, Math.round(this.startGroupResize.startH + deltaY));
+        this.resizingGroup.width = newW;
+        this.resizingGroup.height = newH;
+        const el = document.getElementById(`dom-group-${this.resizingGroup.id}`);
+        if (el) {
+          el.style.width = `${newW}px`;
+          el.style.height = `${newH}px`;
+        }
+      } else if (this.draggingGroup) {
+        const mouse = this.getCanvasCoords(e);
+        const newX = Math.round(mouse.x - this.groupDragOffset.x);
+        const newY = Math.round(mouse.y - this.groupDragOffset.y);
+        const deltaX = newX - this.draggingGroup.x;
+        const deltaY = newY - this.draggingGroup.y;
+        this.draggingGroup.x = newX;
+        this.draggingGroup.y = newY;
+        const el = document.getElementById(`dom-group-${this.draggingGroup.id}`);
+        if (el) {
+          el.style.left = `${newX}px`;
+          el.style.top = `${newY}px`;
+        }
+        // 内包されているカードも一緒に連動移動！
+        this.groupMemberNodes.forEach(node => {
+          node.x += deltaX;
+          node.y += deltaY;
+          this.updateNodePosition(node);
+        });
+        this.renderConnections();
+      } else if (this.resizingNode) {
         const deltaX = (e.clientX - this.startResize.clientX) / this.zoom;
         const deltaY = (e.clientY - this.startResize.clientY) / this.zoom;
         const newWidth = Math.max(160, Math.round(this.startResize.startWidth + deltaX));
@@ -494,6 +763,16 @@ class SynapseApp {
     });
 
     window.addEventListener("mouseup", (e) => {
+      if (this.resizingGroup) {
+        this.resizingGroup = null;
+        this.startGroupResize = null;
+        this.saveState();
+      }
+      if (this.draggingGroup) {
+        this.draggingGroup = null;
+        this.groupMemberNodes = [];
+        this.saveState();
+      }
       if (this.resizingNode) {
         this.resizingNode = null;
         this.startResize = null;
@@ -539,6 +818,12 @@ class SynapseApp {
     this.nodeStatusSelect.addEventListener("change", () => this.updateSelectedNode("status", this.nodeStatusSelect.value));
     this.nodeBodyInput.addEventListener("input", () => this.updateSelectedNode("body", this.nodeBodyInput.value));
     this.nodeTagsInput.addEventListener("input", () => this.updateSelectedNode("tags", this.nodeTagsInput.value));
+    if (this.nodeGroupSelect) {
+      this.nodeGroupSelect.addEventListener("change", () => {
+        const val = this.nodeGroupSelect.value || null;
+        this.updateSelectedNode("groupId", val);
+      });
+    }
 
     // ★削除ボタンを確実に実行
     this.deleteNodeBtn.addEventListener("click", (e) => {
@@ -722,6 +1007,7 @@ class SynapseApp {
   }
 
   render() {
+    this.renderGroups();
     this.renderNodes();
     this.renderConnections();
     this.updateEmptyState();
@@ -733,12 +1019,391 @@ class SynapseApp {
     }
   }
 
+
+  // カードの所属グループを変更
+  setNodeGroup(nodeId, groupId) {
+    this.pushHistory();
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    node.groupId = groupId;
+
+    // もし所属したグループが現在折りたたまれていれば非表示にする
+    const group = this.groups.find(g => g.id === groupId);
+    if (group && group.collapsed) {
+      node.hiddenByGroup = true;
+    } else {
+      node.hiddenByGroup = false;
+    }
+
+    this.render();
+    this.saveState();
+  }
+
+  // 指定グループに所属しているカードを取得（色・所属連動型）
+  getGroupMemberNodes(group) {
+    return this.nodes.filter(node => node.groupId === group.id);
+  }
+
+  // グループ枠の追加（自由なカラーピッカー付き）
+  addNewGroup() {
+    this.pushHistory();
+
+    const centerX = (-this.pan.x + this.container.clientWidth / 2) / this.zoom - 200;
+    const centerY = (-this.pan.y + this.container.clientHeight / 2) / this.zoom - 140;
+
+    const presetColors = ["#3b82f6", "#10b981", "#f97316", "#a855f7", "#ec4899", "#6366f1"];
+    const randomColor = presetColors[this.groups.length % presetColors.length];
+
+    const newGroup = {
+      id: `group-${Date.now()}`,
+      title: `グループ ${this.groups.length + 1}`,
+      color: randomColor,
+      x: Math.round(centerX),
+      y: Math.round(centerY),
+      width: 460,
+      height: 320,
+      collapsed: false
+    };
+
+    this.groups.push(newGroup);
+    this.render();
+    this.saveState();
+  }
+
+  deleteGroup(groupId) {
+    this.pushHistory();
+    // 削除時は所属していたカードを無所属に戻す
+    this.nodes.forEach(n => {
+      if (n.groupId === groupId) {
+        n.groupId = null;
+        n.hiddenByGroup = false;
+      }
+    });
+    this.groups = this.groups.filter(g => g.id !== groupId);
+    this.render();
+    this.saveState();
+  }
+
+  toggleGroupCollapse(groupId) {
+    const group = this.groups.find(g => g.id === groupId);
+    if (!group) return;
+
+    this.pushHistory();
+    const willCollapse = !group.collapsed;
+    group.collapsed = willCollapse;
+
+    // グループ枠のヘッダー中央座標（吸い込み先）
+    const targetX = group.x + group.width / 2;
+    const targetY = group.y + 22;
+
+    const memberNodes = this.nodes.filter(n => n.groupId === group.id);
+
+    if (willCollapse) {
+      // ★ 吸い込まれるアニメーション（現在位置からグループヘッダーへシュッと縮小移動）
+      memberNodes.forEach(node => {
+        const el = document.getElementById(`dom-${node.id}`);
+        if (el) {
+          const deltaX = targetX - (node.x + (node.width || 250) / 2);
+          const deltaY = targetY - (node.y + 40);
+          el.style.transform = `translate(${deltaX}px, ${deltaY}px) scale(0.12)`;
+          el.classList.add("is-sucking");
+        }
+      });
+
+      // アニメーション完了後に完全に非表示化＆再描画
+      setTimeout(() => {
+        memberNodes.forEach(node => {
+          node.hiddenByGroup = true;
+          const el = document.getElementById(`dom-${node.id}`);
+          if (el) {
+            el.style.display = "none";
+            el.style.transform = "";
+            el.classList.remove("is-sucking");
+          }
+        });
+        this.render();
+        this.renderConnections();
+        this.saveState();
+      }, 300);
+    } else {
+      // ★ 飛び出すアニメーション（グループヘッダーからポンッと広がる）
+      memberNodes.forEach(node => {
+        node.hiddenByGroup = false;
+        const el = document.getElementById(`dom-${node.id}`);
+        if (el) {
+          el.style.display = "block";
+          const deltaX = targetX - (node.x + (node.width || 250) / 2);
+          const deltaY = targetY - (node.y + 40);
+          el.style.transform = `translate(${deltaX}px, ${deltaY}px) scale(0.12)`;
+          el.style.opacity = "0";
+
+          // 次のフレームで元の位置へ拡大
+          requestAnimationFrame(() => {
+            el.style.transform = "translate(0px, 0px) scale(1)";
+            el.style.opacity = "1";
+          });
+        }
+      });
+
+      setTimeout(() => {
+        memberNodes.forEach(node => {
+          const el = document.getElementById(`dom-${node.id}`);
+          if (el) {
+            el.style.transform = "";
+            el.style.opacity = "";
+          }
+        });
+        this.render();
+        this.renderConnections();
+        this.saveState();
+      }, 320);
+    }
+  }
+
+  renderGroups() {
+    if (!this.groupsContainer) return;
+    this.groupsContainer.innerHTML = "";
+
+    this.groups.forEach(group => {
+      const el = document.createElement("div");
+      el.className = `mind-group ${group.collapsed ? "is-collapsed" : ""}`;
+      el.id = `dom-group-${group.id}`;
+      el.style.left = `${group.x}px`;
+      el.style.top = `${group.y}px`;
+      el.style.width = `${group.width}px`;
+      if (!group.collapsed) {
+        el.style.height = `${group.height}px`;
+      }
+
+      // グループの枠色・背景色の動的反映
+      el.style.borderColor = group.color || "#3b82f6";
+      el.style.backgroundColor = `${group.color || "#3b82f6"}18`; // 10%前後の透明度
+
+      // 所属カード枚数
+      const members = this.getGroupMemberNodes(group);
+      const memberCount = members.length;
+
+      // ヘッダー
+      const header = document.createElement("div");
+      header.className = "group-header";
+      header.style.borderLeft = `5px solid ${group.color || "#3b82f6"}`;
+
+      // タイトル入力（直接編集可能）
+      const titleInput = document.createElement("input");
+      titleInput.type = "text";
+      titleInput.className = "group-title-input";
+      titleInput.value = group.title;
+      titleInput.placeholder = "グループ名を入力...";
+      titleInput.title = "クリックしてグループ名を編集";
+      titleInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      titleInput.addEventListener("input", (e) => {
+        group.title = e.target.value;
+        this.saveState();
+        // サイドバーのドロップダウン等も再描画
+        if (this.nodeGroupSelect && this.selectedNodeId) {
+          const opt = this.nodeGroupSelect.querySelector(`option[value="${group.id}"]`);
+          if (opt) opt.textContent = `${group.title} (${group.color})`;
+        }
+      });
+
+      // 操作ボタングループ
+      const actions = document.createElement("div");
+      actions.className = "group-actions";
+
+      // プリセット色ドット
+      const colorPicker = document.createElement("div");
+      colorPicker.className = "group-color-picker";
+      ["#3b82f6", "#10b981", "#f97316", "#a855f7"].forEach(hex => {
+        const dot = document.createElement("span");
+        dot.className = "group-color-dot";
+        dot.style.backgroundColor = hex;
+        dot.title = "この色に変更";
+        dot.addEventListener("mousedown", (e) => e.stopPropagation());
+        dot.addEventListener("click", (e) => {
+          e.stopPropagation();
+          group.color = hex;
+          this.render();
+          this.saveState();
+        });
+        colorPicker.appendChild(dot);
+      });
+
+      // ★ グラデーションマップ風カラーピッカー（自由色選択）
+      const colorInputWrap = document.createElement("div");
+      colorInputWrap.className = "group-color-input-wrapper";
+      colorInputWrap.title = "グラデーションマップから好きな色を自由に選ぶ";
+      const colorInput = document.createElement("input");
+      colorInput.type = "color";
+      colorInput.value = group.color || "#3b82f6";
+      colorInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      colorInput.addEventListener("input", (e) => {
+        e.stopPropagation();
+        group.color = e.target.value;
+        el.style.borderColor = group.color;
+        el.style.backgroundColor = `${group.color}18`;
+        header.style.borderLeftColor = group.color;
+        this.renderNodes(); // カードの左側ボーダー色もリアルタイム反映
+        this.saveState();
+      });
+      colorInputWrap.appendChild(colorInput);
+      colorPicker.appendChild(colorInputWrap);
+
+      // 展開/収納ボタン
+      const collapseBtn = document.createElement("button");
+      collapseBtn.type = "button";
+      collapseBtn.className = "group-btn-collapse";
+      collapseBtn.innerHTML = group.collapsed 
+        ? `<span>📁 展開 (${memberCount}枚)</span>` 
+        : `<span>📂 収納 (${memberCount}枚)</span>`;
+      collapseBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      collapseBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleGroupCollapse(group.id);
+      });
+
+      // 削除ボタン
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "group-btn-delete";
+      delBtn.innerHTML = "✕";
+      delBtn.title = "このグループ枠を削除";
+      delBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.deleteGroup(group.id);
+      });
+
+      actions.appendChild(colorPicker);
+      actions.appendChild(collapseBtn);
+      actions.appendChild(delBtn);
+
+      header.appendChild(titleInput);
+      header.appendChild(actions);
+      el.appendChild(header);
+
+      // ★ 収納時に箱の中にタイトルだけの帯を整列して表示するコンテナ
+      const collapsedItemsContainer = document.createElement("div");
+      collapsedItemsContainer.className = "group-collapsed-items";
+
+      if (group.collapsed) {
+        collapsedItemsContainer.style.display = "flex";
+        if (members.length === 0) {
+          collapsedItemsContainer.innerHTML = '<div style="color:#9ca3af; font-size:0.7rem; padding:4px 8px;">(所属カードなし)</div>';
+        } else {
+          members.forEach(mNode => {
+            const item = document.createElement("div");
+            item.className = `group-collapsed-item genre-${mNode.type || "topdown"}`;
+            item.title = "クリックしてこのカードを選択";
+
+            const genreLabels = {
+              topdown: "問い・仮説",
+              bottomup: "知見・メモ",
+              synthesis: "検証・合流",
+              custom: mNode.customLabel || "その他"
+            };
+
+            item.innerHTML = `
+              <span class="collapsed-genre-badge">${this.escapeHtml(genreLabels[mNode.type] || "メモ")}</span>
+              <span class="collapsed-item-title">${this.escapeHtml(mNode.title || "（無題のカード）")}</span>
+            `;
+
+            item.addEventListener("mousedown", (e) => e.stopPropagation());
+            item.addEventListener("click", (e) => {
+              e.stopPropagation();
+              // クリックしたカードを選択してノート編集を開く
+              this.selectNode(mNode.id);
+            });
+
+            collapsedItemsContainer.appendChild(item);
+          });
+        }
+      } else {
+        collapsedItemsContainer.style.display = "none";
+      }
+
+      el.appendChild(collapsedItemsContainer);
+
+      // リサイズハンドル
+      const resizeHandle = document.createElement("div");
+      resizeHandle.className = "group-resize-handle";
+      resizeHandle.title = "ドラッグしてグループ枠の大きさを変更";
+      resizeHandle.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        this.pushHistory();
+        this.resizingGroup = group;
+        this.startGroupResize = {
+          clientX: e.clientX,
+          clientY: e.clientY,
+          startW: group.width,
+          startH: group.height
+        };
+      });
+      resizeHandle.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.pushHistory();
+        this.resizingGroup = group;
+        this.startGroupResize = {
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+          startW: group.width,
+          startH: group.height
+        };
+      }, { passive: false });
+      el.appendChild(resizeHandle);
+
+      // ヘッダードラッグでグループ移動＋所属カードも一緒に連動移動
+      header.addEventListener("mousedown", (e) => {
+        if (e.target.closest("input") || e.target.closest("button") || e.target.closest(".group-color-dot") || e.target.closest(".group-color-input-wrapper")) return;
+        e.stopPropagation();
+        this.pushHistory();
+        this.draggingGroup = group;
+        this.groupMemberNodes = this.getGroupMemberNodes(group);
+        const mouse = this.getCanvasCoords(e);
+        this.groupDragOffset = {
+          x: mouse.x - group.x,
+          y: mouse.y - group.y
+        };
+      });
+      header.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        if (e.target.closest("input") || e.target.closest("button") || e.target.closest(".group-color-dot") || e.target.closest(".group-color-input-wrapper")) return;
+        e.stopPropagation();
+        const touch = e.touches[0];
+        this.pushHistory();
+        this.draggingGroup = group;
+        this.groupMemberNodes = this.getGroupMemberNodes(group);
+        const mouse = this.getCanvasCoords(touch);
+        this.groupDragOffset = {
+          x: mouse.x - group.x,
+          y: mouse.y - group.y
+        };
+      }, { passive: true });
+
+      // ヘッダーダブルクリックでも折りたたみ可能
+      header.addEventListener("dblclick", (e) => {
+        if (e.target.closest("input") || e.target.closest("button")) return;
+        e.stopPropagation();
+        this.toggleGroupCollapse(group.id);
+      });
+
+      this.groupsContainer.appendChild(el);
+    });
+  }
   // ==========================================
   // 6. ノード描画・操作 ＆ クイック削除
   // ==========================================
   renderNodes() {
     this.nodesContainer.innerHTML = "";
     this.nodes.forEach(node => {
+      // ★ 所属グループが収納中（collapsed）のカードはキャンバス上には描画せず箱の中に収める！
+      const parentGroup = this.groups.find(g => g.id === node.groupId);
+      if (parentGroup && parentGroup.collapsed) return;
+      if (node.hiddenByGroup) return;
+
       const el = document.createElement("div");
       el.className = `mind-node node-${node.type} ${this.selectedNodeId === node.id ? "selected" : ""} ${node.collapsed ? "is-collapsed" : ""}`;
       el.id = `dom-${node.id}`;
@@ -775,6 +1440,20 @@ class SynapseApp {
           startHeight: el.offsetHeight
         };
       });
+      resizeHandle.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.pushHistory();
+        this.resizingNode = node;
+        this.startResize = {
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+          startWidth: el.offsetWidth,
+          startHeight: el.offsetHeight
+        };
+      }, { passive: false });
 
       // 上部コネクタ
       const topHandle = document.createElement("div");
@@ -785,6 +1464,12 @@ class SynapseApp {
         e.stopPropagation();
         this.startConnectionDrag(node.id, e);
       });
+      topHandle.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        e.stopPropagation();
+        e.preventDefault();
+        this.startConnectionDrag(node.id, e.touches[0]);
+      }, { passive: false });
 
       // 下部コネクタ
       const bottomHandle = document.createElement("div");
@@ -795,6 +1480,12 @@ class SynapseApp {
         e.stopPropagation();
         this.startConnectionDrag(node.id, e);
       });
+      bottomHandle.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        e.stopPropagation();
+        e.preventDefault();
+        this.startConnectionDrag(node.id, e.touches[0]);
+      }, { passive: false });
 
       // 左部コネクタ
       const leftHandle = document.createElement("div");
@@ -805,6 +1496,12 @@ class SynapseApp {
         e.stopPropagation();
         this.startConnectionDrag(node.id, e);
       });
+      leftHandle.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        e.stopPropagation();
+        e.preventDefault();
+        this.startConnectionDrag(node.id, e.touches[0]);
+      }, { passive: false });
 
       // 右部コネクタ
       const rightHandle = document.createElement("div");
@@ -815,6 +1512,12 @@ class SynapseApp {
         e.stopPropagation();
         this.startConnectionDrag(node.id, e);
       });
+      rightHandle.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        e.stopPropagation();
+        e.preventDefault();
+        this.startConnectionDrag(node.id, e.touches[0]);
+      }, { passive: false });
 
       let typeLabel = "Top-down (問い・仮説)";
       if (node.type === "bottomup") {
@@ -825,6 +1528,28 @@ class SynapseApp {
         typeLabel = `Custom (${node.customLabel || "その他"})`;
       }
 
+      const assignedGroup = this.groups.find(g => g.id === node.groupId);
+      if (assignedGroup) {
+        el.classList.add("has-group");
+        el.style.borderLeftColor = assignedGroup.color || "#3b82f6";
+      } else {
+        el.style.borderLeftColor = "";
+      }
+
+      // グループ枠が1つ以上ある時だけ、ただのカラー丸ぽちをシンプルに並べる（文字なし）
+      let groupDotsHtml = "";
+      if (this.groups.length > 0) {
+        groupDotsHtml += `<div class="node-group-dots-bar">`;
+        // 白のぽち（無所属）
+        groupDotsHtml += `<button type="button" class="node-group-dot-btn is-none ${!node.groupId ? "is-active" : ""}" data-group-id="" title="無所属（白）"></button>`;
+        // 各グループのカラー丸ぽち
+        this.groups.forEach(g => {
+          const isActive = node.groupId === g.id;
+          groupDotsHtml += `<button type="button" class="node-group-dot-btn ${isActive ? "is-active" : ""}" data-group-id="${g.id}" style="background-color: ${g.color};" title="${this.escapeHtml(g.title)}"></button>`;
+        });
+        groupDotsHtml += `</div>`;
+      }
+
       el.innerHTML = `
         <div class="node-header">
           <span class="node-badge" title="クリックで折りたたみ / 展開">${typeLabel}</span>
@@ -832,6 +1557,7 @@ class SynapseApp {
         </div>
         <div class="node-title">${this.escapeHtml(node.title)}</div>
         <div class="node-snippet">${this.escapeHtml(node.body || "（詳細ノートなし）")}</div>
+        ${groupDotsHtml}
       `;
 
       el.appendChild(quickDel);
@@ -840,6 +1566,17 @@ class SynapseApp {
       el.appendChild(bottomHandle);
       el.appendChild(leftHandle);
       el.appendChild(rightHandle);
+
+      // ★ カラー丸ぽちクリックで即座にグループ所属切り替え！
+      const dotBtns = el.querySelectorAll(".node-group-dot-btn");
+      dotBtns.forEach(btn => {
+        btn.addEventListener("mousedown", (e) => e.stopPropagation());
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const targetGid = btn.dataset.groupId || null;
+          this.setNodeGroup(node.id, targetGid);
+        });
+      });
 
       // バッジをクリックした時に折りたたみ・展開をトグル
       const badgeEl = el.querySelector(".node-badge");
@@ -858,7 +1595,8 @@ class SynapseApp {
           e.target.closest(".connector-handle") ||
           e.target.closest(".node-quick-delete") ||
           e.target.closest(".node-resize-handle") ||
-          e.target.closest(".node-badge")
+          e.target.closest(".node-badge") ||
+          e.target.closest(".node-group-dot-btn")
         ) return;
         e.stopPropagation();
         this.selectNode(node.id);
@@ -872,6 +1610,29 @@ class SynapseApp {
           y: mouse.y - node.y
         };
       });
+
+      el.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 1) return;
+        if (
+          e.target.closest(".connector-handle") ||
+          e.target.closest(".node-quick-delete") ||
+          e.target.closest(".node-resize-handle") ||
+          e.target.closest(".node-badge") ||
+          e.target.closest(".node-group-dot-btn")
+        ) return;
+        e.stopPropagation();
+        const touch = e.touches[0];
+        this.selectNode(node.id);
+
+        this.pushHistory();
+        this.draggingNode = node;
+        this.hasDragged = false;
+        const mouse = this.getCanvasCoords(touch);
+        this.dragOffset = {
+          x: mouse.x - node.x,
+          y: mouse.y - node.y
+        };
+      }, { passive: true });
 
       this.nodesContainer.appendChild(el);
     });
@@ -963,6 +1724,31 @@ class SynapseApp {
     this.nodeStatusSelect.value = node.status;
     this.nodeBodyInput.value = node.body || "";
     this.nodeTagsInput.value = node.tags || "";
+
+    // 所属グループドロップダウンの更新（青丸などを左側に・英語除去）
+    if (this.nodeGroupSelect) {
+      this.nodeGroupSelect.innerHTML = '<option value="">⚪ 無所属</option>';
+      const getEmojiForColor = (color) => {
+        if (!color) return "🔵";
+        const c = color.toLowerCase();
+        if (c.includes("blue") || c === "#3b82f6" || c === "#2563eb" || c.includes("2d4f7c")) return "🔵";
+        if (c.includes("green") || c === "#10b981" || c === "#4ade80") return "🟢";
+        if (c.includes("orange") || c === "#f97316" || c === "#fb923c") return "🟠";
+        if (c.includes("purple") || c === "#a855f7" || c === "#c084fc") return "🟣";
+        if (c.includes("pink") || c === "#ec4899") return "🌸";
+        if (c.includes("red") || c === "#ef4444") return "🔴";
+        return "🎨";
+      };
+
+      this.groups.forEach(g => {
+        const opt = document.createElement("option");
+        opt.value = g.id;
+        const emoji = getEmojiForColor(g.color);
+        opt.textContent = `${emoji} ${g.title}`;
+        if (node.groupId === g.id) opt.selected = true;
+        this.nodeGroupSelect.appendChild(opt);
+      });
+    }
 
     const typeNames = {
       topdown: "問い・仮説 (Top-down)",
@@ -1057,6 +1843,8 @@ class SynapseApp {
           badge.textContent = `Custom (${value || "その他"})`;
         }
         this.noteTypeBadge.textContent = `その他・自由設定 (${value || "その他"})`;
+      } else if (field === "groupId") {
+        this.setNodeGroup(node.id, value);
       }
     }
   }
@@ -1121,6 +1909,12 @@ class SynapseApp {
       const toNode = this.nodes.find(n => n.id === conn.to);
       if (!fromNode || !toNode) return;
 
+      // 収納中グループのカードに繋がる矢印は非表示
+      const fromGroup = this.groups.find(g => g.id === fromNode.groupId);
+      const toGroup = this.groups.find(g => g.id === toNode.groupId);
+      if ((fromGroup && fromGroup.collapsed) || (toGroup && toGroup.collapsed)) return;
+      if (fromNode.hiddenByGroup || toNode.hiddenByGroup) return;
+
       // ★ 矢印の生える場所（ポート）はカード位置を変えても固定！
       // 過去データや未設定の場合はデフォルトで bottom -> top
       const fromPort = conn.fromPort || "bottom";
@@ -1150,7 +1944,21 @@ class SynapseApp {
       const c2X = endX + p2.nx * tension;
       const c2Y = endY + p2.ny * tension;
 
-      const pathData = `M ${startX} ${startY} C ${c1X} ${c1Y}, ${c2X} ${c2Y}, ${endX} ${endY}`;
+      // 線の形状（曲線 curve か 直線 straight か）
+      const shape = conn.shape || "curve";
+      let pathData = "";
+
+      // ほぼ真っ直ぐ並んでいるかどうかの判定（エイムアシスト直線化）
+      const isHorizontalAligned = Math.abs(dy) < 16 && (fromPort === "right" && toPort === "left" || fromPort === "left" && toPort === "right");
+      const isVerticalAligned = Math.abs(dx) < 16 && (fromPort === "bottom" && toPort === "top" || fromPort === "top" && toPort === "bottom");
+
+      if (shape === "straight" || isHorizontalAligned || isVerticalAligned) {
+        // 完全な直線矢印
+        pathData = `M ${startX} ${startY} L ${endX} ${endY}`;
+      } else {
+        // 滑らかなベジェ曲線
+        pathData = `M ${startX} ${startY} C ${c1X} ${c1Y}, ${c2X} ${c2Y}, ${endX} ${endY}`;
+      }
 
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", pathData);
@@ -1249,6 +2057,8 @@ class SynapseApp {
       const val = btn.dataset.val;
       let active = false;
 
+      const shape = conn.shape || "curve";
+      if (action === "shape" && val === shape) active = true;
       if (action === "style" && val === style) active = true;
       if (action === "arrow" && val === arrow) active = true;
       if (action === "width" && val === width) active = true;
@@ -1325,63 +2135,116 @@ class SynapseApp {
 
   updateDragLine(e) {
     const mouse = this.getCanvasCoords(e);
-    this.dragLine.setAttribute("x2", mouse.x);
-    this.dragLine.setAttribute("y2", mouse.y);
+
+    // ★ エイムアシスト（近接ポートへのマグネット吸着）
+    let nearestPort = null;
+    let minDistance = 38; // 吸着する半径（px）
+
+    document.querySelectorAll(".connector-handle.aim-assist-target").forEach(el => {
+      el.classList.remove("aim-assist-target");
+    });
+
+    for (const node of this.nodes) {
+      if (node.id === this.connectingSourceId || node.hiddenByGroup) continue;
+
+      ["top", "bottom", "left", "right"].forEach(port => {
+        const coord = this.getNodePortCoord(node, port);
+        const d = Math.hypot(mouse.x - coord.x, mouse.y - coord.y);
+        if (d < minDistance) {
+          minDistance = d;
+          nearestPort = {
+            nodeId: node.id,
+            port: port,
+            x: coord.x,
+            y: coord.y
+          };
+        }
+      });
+    }
+
+    if (nearestPort) {
+      // 磁石のようにピタッと吸着！
+      this.aimSnappedPort = nearestPort;
+      this.dragLine.setAttribute("x2", nearestPort.x);
+      this.dragLine.setAttribute("y2", nearestPort.y);
+
+      // 対象のコネクタハンドルをハイライト
+      const targetEl = document.getElementById(`dom-${nearestPort.nodeId}`);
+      if (targetEl) {
+        const handle = targetEl.querySelector(`.connector-${nearestPort.port}`);
+        if (handle) handle.classList.add("aim-assist-target");
+      }
+    } else {
+      this.aimSnappedPort = null;
+      this.dragLine.setAttribute("x2", mouse.x);
+      this.dragLine.setAttribute("y2", mouse.y);
+    }
   }
 
   finishConnectionDrag(e) {
     this.dragLine.style.display = "none";
-    const handleEl = e.target.closest(".connector-handle");
-    const targetEl = e.target.closest(".mind-node");
+    document.querySelectorAll(".connector-handle.aim-assist-target").forEach(el => {
+      el.classList.remove("aim-assist-target");
+    });
 
-    if (targetEl && this.connectingSourceId) {
-      const targetId = targetEl.id.replace("dom-", "");
-      if (targetId !== this.connectingSourceId) {
-        const exists = this.connections.some(c => 
-          (c.from === this.connectingSourceId && c.to === targetId) ||
-          (c.from === targetId && c.to === this.connectingSourceId)
-        );
+    let targetId = null;
+    let toPort = "top";
 
-        if (!exists) {
-          // ドロップ先のポート判定（ハンドル上で離された場合はそのポート、カード本体なら位置関係から最も近いポート）
-          let toPort = "top";
-          if (handleEl && handleEl.dataset.port) {
-            toPort = handleEl.dataset.port;
-          } else {
-            const toNode = this.nodes.find(n => n.id === targetId);
-            if (toNode) {
-              const mouse = this.getCanvasCoords(e);
-              const toEl = document.getElementById(`dom-${toNode.id}`);
-              const tw = toEl ? toEl.offsetWidth : (toNode.width || 250);
-              const th = toEl ? toEl.offsetHeight : (toNode.height || 96);
-              const cx = toNode.x + tw / 2;
-              const cy = toNode.y + th / 2;
-              const dx = mouse.x - cx;
-              const dy = mouse.y - cy;
-              if (Math.abs(dx) > Math.abs(dy)) {
-                toPort = dx < 0 ? "left" : "right";
-              } else {
-                toPort = dy < 0 ? "top" : "bottom";
-              }
+    if (this.aimSnappedPort) {
+      // ★ エイムアシストで吸着されたターゲットを最優先で接続
+      targetId = this.aimSnappedPort.nodeId;
+      toPort = this.aimSnappedPort.port;
+    } else {
+      const handleEl = e.target.closest(".connector-handle");
+      const targetEl = e.target.closest(".mind-node");
+      if (targetEl) {
+        targetId = targetEl.id.replace("dom-", "");
+        if (handleEl && handleEl.dataset.port) {
+          toPort = handleEl.dataset.port;
+        } else {
+          const toNode = this.nodes.find(n => n.id === targetId);
+          if (toNode) {
+            const mouse = this.getCanvasCoords(e);
+            const toEl = document.getElementById(`dom-${toNode.id}`);
+            const tw = toEl ? toEl.offsetWidth : (toNode.width || 250);
+            const th = toEl ? toEl.offsetHeight : (toNode.height || 96);
+            const cx = toNode.x + tw / 2;
+            const cy = toNode.y + th / 2;
+            const dx = mouse.x - cx;
+            const dy = mouse.y - cy;
+            if (Math.abs(dx) > Math.abs(dy)) {
+              toPort = dx < 0 ? "left" : "right";
+            } else {
+              toPort = dy < 0 ? "top" : "bottom";
             }
           }
-
-          this.pushHistory();
-          this.connections.push({
-            id: `conn-${Date.now()}`,
-            from: this.connectingSourceId,
-            to: targetId,
-            fromPort: this.connectingSourcePort || "bottom",
-            toPort: toPort
-          });
-          this.renderConnections();
-          this.saveState();
         }
+      }
+    }
+
+    if (targetId && this.connectingSourceId && targetId !== this.connectingSourceId) {
+      const exists = this.connections.some(c => 
+        (c.from === this.connectingSourceId && c.to === targetId) ||
+        (c.from === targetId && c.to === this.connectingSourceId)
+      );
+
+      if (!exists) {
+        this.pushHistory();
+        this.connections.push({
+          id: `conn-${Date.now()}`,
+          from: this.connectingSourceId,
+          to: targetId,
+          fromPort: this.connectingSourcePort || "bottom",
+          toPort: toPort || "top"
+        });
+        this.renderConnections();
+        this.saveState();
       }
     }
 
     this.connectingSourceId = null;
     this.connectingSourcePort = null;
+    this.aimSnappedPort = null;
   }
 
   // ==========================================
