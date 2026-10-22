@@ -1611,6 +1611,12 @@ class SynapseApp {
         };
       });
 
+      let touchStartTime = 0;
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let longPressTimer = null;
+      let isLongPressed = false;
+
       el.addEventListener("touchstart", (e) => {
         if (e.touches.length > 1) return;
         if (
@@ -1620,19 +1626,87 @@ class SynapseApp {
           e.target.closest(".node-badge") ||
           e.target.closest(".node-group-dot-btn")
         ) return;
-        e.stopPropagation();
-        const touch = e.touches[0];
-        this.selectNode(node.id);
 
-        this.pushHistory();
-        this.draggingNode = node;
+        const touch = e.touches[0];
+        touchStartTime = Date.now();
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        isLongPressed = false;
         this.hasDragged = false;
+
         const mouse = this.getCanvasCoords(touch);
         this.dragOffset = {
           x: mouse.x - node.x,
           y: mouse.y - node.y
         };
+
+        // ★ 約0.22秒（220ms）の長押しでカードがフワッと浮き上がり移動モードへ！
+        longPressTimer = setTimeout(() => {
+          isLongPressed = true;
+          this.draggingNode = node;
+          this.pushHistory();
+          el.classList.add("is-touch-dragging");
+          if (navigator.vibrate) {
+            try { navigator.vibrate(25); } catch(err){}
+          }
+        }, 220);
+      }, { passive: false });
+
+      el.addEventListener("touchmove", (e) => {
+        if (e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        const dist = Math.hypot(touch.clientX - touchStartX, touch.clientY - touchStartY);
+
+        // 8px以上スライドした場合は長押し前でも即座に移動モードへ移行
+        if (dist > 8) {
+          clearTimeout(longPressTimer);
+          if (!this.draggingNode) {
+            isLongPressed = true;
+            this.draggingNode = node;
+            this.pushHistory();
+            el.classList.add("is-touch-dragging");
+          }
+        }
+
+        if (this.draggingNode === node) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.hasDragged = true;
+          const mouse = this.getCanvasCoords(touch);
+          node.x = Math.max(20, Math.round(mouse.x - this.dragOffset.x));
+          node.y = Math.max(20, Math.round(mouse.y - this.dragOffset.y));
+          this.updateNodePosition(node);
+          this.renderConnections();
+        }
+      }, { passive: false });
+
+      el.addEventListener("touchend", (e) => {
+        clearTimeout(longPressTimer);
+        el.classList.remove("is-touch-dragging");
+
+        if (this.draggingNode === node) {
+          if (this.hasDragged) {
+            this.saveState();
+          }
+          this.draggingNode = null;
+          this.hasDragged = false;
+          // 移動したときはサイドバーを開かない！
+          return;
+        }
+
+        // ★ 短いポンとタップ（300ms以内・指が動いていない）の時だけ詳細編集画面を開く！
+        const duration = Date.now() - touchStartTime;
+        if (!isLongPressed && duration < 320) {
+          this.selectNode(node.id);
+        }
       }, { passive: true });
+
+      el.addEventListener("touchcancel", () => {
+        clearTimeout(longPressTimer);
+        el.classList.remove("is-touch-dragging");
+        this.draggingNode = null;
+        this.hasDragged = false;
+      });
 
       this.nodesContainer.appendChild(el);
     });
